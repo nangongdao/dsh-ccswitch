@@ -14,35 +14,41 @@
 
 ## 安装插件
 
-macOS、Windows PowerShell 和 Linux 都可以执行：
+### DSH 桌面版（Windows / macOS）
+
+打开 DSH 左侧的「插件」页面，使用安装入口填写：
+
+```text
+github:nangongdao/dsh-ccswitch
+```
+
+安装后确认 `dsh-ccswitch` 已启用。当前桌面安装页注明暂不支持自动更新：已安装旧版时，先在插件页卸载 `dsh-ccswitch`，再安装同一来源。桌面版的 `desktop` profile 由 Electron 应用管理；不要执行 `dsh plugin --profile desktop add ...`，当前 DSH 会拒绝这个命令。
+
+### 命令行 Web 版（macOS / Windows PowerShell / Linux）
 
 ```bash
 dsh plugin --profile web add github:nangongdao/dsh-ccswitch
 ```
 
-`--profile` 必须和 DSH 实际使用的 profile 一致，否则插件会装到另一个 profile 里、界面中不会出现。命令行 `dsh web` 用的是 `web`；DSH 桌面版用的是 `desktop`：
-
-```bash
-dsh plugin --profile desktop add github:nangongdao/dsh-ccswitch
-```
-
-不确定时可以先看 `$DSH_HOME/profiles` 下有哪些目录（Windows 默认 `%USERPROFILE%\.dsh\profiles`），或者直接用 DSH 界面里的插件市场安装。
-
-安装完成后重启 DSH。前台运行时先按 `Ctrl+C` 停止，再重新启动：
+`--profile` 必须和 `dsh web` 实际使用的 profile 一致。前台运行时按 `Ctrl+C` 停止后重新启动：
 
 ```bash
 dsh web --host 127.0.0.1 --port 3080
 ```
 
-重新打开或刷新 DSH 页面后，就可以在模型选择器中看到 CC Switch 的 provider 和模型。
+### 安装后
+
+重新打开模型选择器；仍显示旧目录时刷新页面，必要时重启 DSH。应当看到名称以 `CC Switch · Claude ·`、`CC Switch · Codex ·` 或 `CC Switch · Gemini ·` 开头的分组，而不是一个统一叫「CC Switch provider」的分组。
 
 ## 选择模型
 
 打开 DSH 的模型选择器：
 
-1. 找到名称以 CC Switch provider 显示的模型分组。
-2. 直接选择需要的模型。
-3. 模型较多时，在顶部的“搜索模型”输入框中输入模型名称。
+1. 如果皮肤只显示少量快捷模型，先点击「更多模型」打开完整目录。
+2. 找到名称以 `CC Switch ·` 开头的分组；后面是应用类型和原 CC Switch provider 名称。
+3. 选择需要的模型。模型较多时，可以使用“搜索模型”输入框筛选。
+
+例如 `CC Switch · Codex · 我的线路`。每条 CC Switch 路由独立成组，不会合并成单一 provider。
 
 插件会自动读取 CC Switch 后续的配置变化。添加、删除或修改 provider 后，通常不需要重新安装插件。
 
@@ -119,7 +125,7 @@ dsh web --host 127.0.0.1 --port 3080
 1. CC Switch 中是否已经添加并启用了 provider。
 2. CC Switch 中的模型是否可以正常请求。
 3. 安装插件后是否重启并刷新了 DSH。
-4. 安装时 `--profile` 是否和 DSH 实际使用的 profile 一致（桌面版为 `desktop`，命令行 `dsh web` 为 `web`）。
+4. 桌面版是否在当前 DSH 的「插件」页面安装且已启用；Web 版的 `--profile` 是否与实际启动时一致。
 5. 是否配置了错误的 `ccswitch-providers.json` 筛选条件。
 6. 使用自定义 CC Switch 目录时，确认 CC Switch 中的「数据目录」仍然存在；仍看不到模型时，用 `DSH_CCSWITCH_DB` 显式指向正确的 `cc-switch.db` 文件（见上一节）。
 
@@ -127,10 +133,12 @@ dsh web --host 127.0.0.1 --port 3080
 
 ## 版本兼容
 
-`dsh-ccswitch` `0.2.1` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
+`dsh-ccswitch` `0.2.2` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
 
 - DSH `0.2.0-rc.2` 及后续 `0.2.x`：使用本版本。
 - DSH `0.1.x`（含 `0.1.0-rc.7`）：请继续使用 `dsh-ccswitch` `0.1.1`，本版本不向下兼容。
+
+`0.2.2` 为每个 provider 分组增加 `CC Switch · 应用 · 原名称` 标识；修复同一路由的模型/名称更新和端点模型发现后未通知 DSH 刷新目录的问题，并纠正桌面版安装说明。
 
 `0.2.1` 修复了 CC Switch 使用自定义数据目录时看不到 provider 的问题：插件会读取 CC Switch 的 `app_paths.json` 跟随实际数据目录，不再只认 `~/.cc-switch`。
 

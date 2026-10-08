@@ -32,7 +32,7 @@ export function apply(ctx: Context): void {
   let refreshing = false
   let lastDiscoveryAt = 0
 
-  const syncRegistration = (): void => {
+  const syncRegistration = (force = false): void => {
     const routes = repository.current.routes.map(route => route.provider)
     if (routes.length === 0) {
       if (registration !== undefined && registeredRoutes.length > 0) {
@@ -43,7 +43,9 @@ export function apply(ctx: Context): void {
     }
     if (registration === undefined) {
       registration = ctx.llm.registerAdapter([...routes], adapter)
-    } else if (routes.join('\n') !== registeredRoutes.join('\n')) {
+    } else if (force || routes.join('\n') !== registeredRoutes.join('\n')) {
+      // DSH 0.2 caches the browser catalog until adapters-updated. Replacing
+      // the same ids also republishes changed provider/model metadata.
       registration.replace([...routes])
     }
     registeredRoutes = routes
@@ -59,7 +61,9 @@ export function apply(ctx: Context): void {
           const credential = await resolveCredential(route, repository)
           const models = await discoverRouteModels(route, credential)
           const current = repository.current.routes.find(candidate => candidate.provider === route.provider)
-          if (current?.fingerprint === route.fingerprint) adapter.setDiscoveredModels(route.provider, models)
+          if (current?.fingerprint === route.fingerprint && adapter.setDiscoveredModels(route.provider, models)) {
+            syncRegistration(true)
+          }
         } catch (error: unknown) {
           // Discovery is advisory. The configured/default model remains
           // available when an endpoint is private, offline, or OAuth-expired.
@@ -77,7 +81,7 @@ export function apply(ctx: Context): void {
       if (!repository.exists()) return
       const changed = repository.read()
       if (changed) adapter.clearDiscoveredModels()
-      syncRegistration()
+      syncRegistration(changed)
       if (changed || Date.now() - lastDiscoveryAt >= DISCOVERY_RETRY_MS) void discover()
     } catch (error: unknown) {
       ctx.logger.warn(`dsh-ccswitch: CC Switch configuration read failed: ${describeError(error)}`)

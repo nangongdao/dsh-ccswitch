@@ -301,6 +301,12 @@
   5 files changed / +300 −13）；临时目录 `E:\dsh-ccswitch-upgradetest{,2}` 与全部 `.probe-*` 探针已删除
   （删除前 `Resolve-Path` 逐个确认路径相符）。
 - **Not verified**：未在用户正在运行的 desktop profile 内执行升级（未动用户环境，改由用户在 DSH 内自行重装）；
-  未在升级后由用户在 GUI 中肉眼确认 provider 列表（已由 stub ctx 的 81 条注册 + 真实库读取覆盖）。
+  未在升级后由用户在 GUI 中肉眼确认 provider 列表（stub 注册不能代替 GUI 验收）。
 
+## S13 目录失效通知与可识别分组（0.2.2）
 
+- **Observed**：DSH 0.2 模型选择器缓存 session model catalog，通过 `llm/adapters-updated` 失效。旧插件只在 provider ID 集合变化时替换注册；同 ID 的模型/名称更新以及端点发现不会发出通知。
+- **Modified**：配置变化时 `syncRegistration(changed)`，发现模型真正变化时 `syncRegistration(true)`；setter 比较 id、name、contextWindow、maxTokens 并返回是否变化。每个分组显示 `CC Switch · 应用 · 原名称`，不改变 provider ID 或原筛选名称。
+- **Tested**：真实 Cordis/LlmRuntime + 临时 SQLite 集成覆盖 81 条合成路由、restart/dispose、数据库后到、同 route 模型/名字变化通知、无变化不重复通知和空目录恢复。不包含真实凭证、不发 HTTP。聚焦 19/19，全仓 73/73，typecheck/build 通过。
+- **Installation**：当前 Electron 独占管理 `desktop` profile，CLI 拒绝 `--profile desktop` 安装；README 改为桌面「插件 → 添加插件」安装 GitHub 来源，旧版先卸载再安装。命令行 Web 版继续使用 `--profile web`。
+- **Runtime evidence**：经用户授权，在真实 desktop 加载 0.2.1 后，session model catalog 返回 CC Switch 分组且无 provider 错误；GUI 皮肤的「更多模型」能打开完整目录，但原名称缺少来源标识。0.2.2 的仓库安装与 GUI 前缀验收待发布后单独记录。

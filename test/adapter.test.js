@@ -44,12 +44,16 @@ function imageRef(overrides = {}) {
   }
 }
 
-test('publishes the configured provider name and falls back to the id', () => {
-  const codex = route('codex', 'gpt-5.6-sol')
-  const adapter = new CcSwitchAdapter(repositoryFor([codex]))
-
-  assert.deepEqual(adapter.providerInfo(codex.provider), { id: codex.provider, name: 'Test Provider' })
-  assert.deepEqual(adapter.providerInfo('ccswitch/unknown/x'), { id: 'ccswitch/unknown/x', name: 'ccswitch/unknown/x' })
+test('prefixes provider names with CC Switch and app without altering source route names', () => {
+  for (const [app, label] of [['claude', 'Claude'], ['codex', 'Codex'], ['gemini', 'Gemini']]) {
+    const source = route(app, 'synthetic-model')
+    const adapter = new CcSwitchAdapter(repositoryFor([source]))
+    assert.deepEqual(adapter.providerInfo(source.provider), {
+      id: source.provider, name: `CC Switch · ${label} · Test Provider`,
+    })
+    assert.equal(source.name, 'Test Provider', 'source name remains available for existing selectors')
+    assert.deepEqual(adapter.providerInfo('ccswitch/unknown/x'), { id: 'ccswitch/unknown/x', name: 'ccswitch/unknown/x' })
+  }
 })
 
 test('lists every route model with its declared input modalities', async () => {
@@ -131,6 +135,28 @@ test('endpoint-discovered models override the stored catalog until cleared', asy
   adapter.clearDiscoveredModels()
   const restored = await adapter.listModels(codex.provider)
   assert.deepEqual(restored.map(model => model.id), ['gpt-5.6-sol'])
+})
+
+test('discovered model setters identify catalog changes and ignore no-op updates', async () => {
+  const source = route('codex', 'synthetic-default')
+  const adapter = new CcSwitchAdapter(repositoryFor([source]))
+  const first = { id: 'synthetic-discovered', name: 'First', contextWindow: 128_000, maxTokens: 8_192 }
+  assert.equal(adapter.setDiscoveredModels(source.provider, []), false)
+  assert.equal(adapter.setDiscoveredModels(source.provider, [first]), true)
+  assert.equal(adapter.setDiscoveredModels(source.provider, [{ ...first }]), false)
+  const renamed = { ...first, name: 'Renamed' }
+  assert.equal(adapter.setDiscoveredModels(source.provider, [renamed]), true)
+  assert.equal((await adapter.listModels(source.provider))[0].name, 'Renamed')
+  const expanded = { ...renamed, contextWindow: 256_000 }
+  assert.equal(adapter.setDiscoveredModels(source.provider, [expanded]), true)
+  assert.equal((await adapter.resolveModel(source.provider, first.id)).context.contextWindow, 256_000)
+  const longer = { ...expanded, maxTokens: 16_384 }
+  assert.equal(adapter.setDiscoveredModels(source.provider, [longer]), true)
+  assert.equal(adapter.setDiscoveredModels(source.provider, [{ ...longer }]), false)
+  assert.equal(adapter.setDiscoveredModels(source.provider, []), false, 'an empty discovery cannot erase a valid catalog')
+  adapter.clearDiscoveredModels()
+  assert.equal((await adapter.listModels(source.provider))[0].id, 'synthetic-default')
+  assert.equal(adapter.setDiscoveredModels(source.provider, [longer]), true, 'clearing also resets no-op comparison state')
 })
 
 test('stream refuses GenerateOptions.stop before touching the network', async () => {
