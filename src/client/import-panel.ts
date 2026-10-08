@@ -76,9 +76,9 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     const outcomes: ImportOutcome[] = []
     // The importer re-reads the interface model list for each chunk before it
     // writes, so importing never needs a separate refresh step first.
-    for (let offset = 0; offset < selected.length; offset += CHUNK) {
-      const chunk = selected.slice(offset, offset + CHUNK)
-      setProgress(`正在导入 ${Math.min(offset + chunk.length, selected.length)}/${selected.length}…`)
+    for (let offset = 0; offset < chosen.length; offset += CHUNK) {
+      const chunk = chosen.slice(offset, offset + CHUNK)
+      setProgress(`正在导入 ${Math.min(offset + chunk.length, chosen.length)}/${chosen.length}…`)
       const answer = await remote.importProviders(chunk)
       if (!answer.ok) throw new Error(answer.error.message)
       outcomes.push(...answer.value)
@@ -86,6 +86,9 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     }
     const fresh = await reload()
     report(outcomes, fresh.rows)
+    // Keep only the ones that failed so a retry after fixing the cause is one click.
+    const failed = new Set(outcomes.filter(outcome => outcome.status === 'failed').map(outcome => outcome.provider))
+    setSelected(current => current.filter(id => failed.has(id)))
   })
   const runOne = (provider: string, kind: 'update' | 'remove') => guard(kind, async () => {
     const rows = view?.rows ?? []
@@ -96,20 +99,29 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     const fresh = await reload()
     report(answer.value, fresh.rows)
   })
-  const toggle = (provider: string) => setSelected(current => current.includes(provider)
-    ? current.filter(id => id !== provider)
-    : current.length >= MAX_SELECTION ? current : [...current, provider])
+  const toggle = (provider: string) => setSelected(current => {
+    const live = current.filter(id => importableIds.includes(id))
+    if (live.includes(provider)) return live.filter(id => id !== provider)
+    return live.length >= MAX_SELECTION ? live : [...live, provider]
+  })
 
-  const rows = view?.rows.filter(row => `${row.name} ${row.appType} ${row.provider} ${row.protocol}`.toLowerCase().includes(filter.trim().toLowerCase())) ?? []
+  const rows = view?.rows.filter(row => `${row.name} ${row.appType} ${row.provider} ${row.protocol} ${(row.sample ?? []).join(' ')}`.toLowerCase().includes(filter.trim().toLowerCase())) ?? []
   const importable = rows.filter(row => row.eligible)
   const imported = rows.filter(row => row.imported)
   const dynamic = rows.filter(row => !row.eligible && !row.imported)
+  // A route that got imported (or whose catalog emptied) must drop out of the
+  // selection, or the count and the import button would describe rows that are
+  // no longer selectable. The unfiltered list is the reference, so filtering
+  // the list never silently drops a selection.
+  const importableIds = (view?.rows ?? []).filter(row => row.eligible && !row.imported).map(row => row.provider)
+  const chosen = selected.filter(id => importableIds.includes(id))
+  const allChosen = importable.length > 0 && importable.every(entry => chosen.includes(entry.provider))
   const busy = phase !== ''
   // With nothing selected the read button refreshes every importable route, so
   // the common "just tell me all the models" want is one click, not a select-all.
-  const refreshTargets = selected.length > 0 ? selected : importable.slice(0, MAX_SELECTION).map(entry => entry.provider)
+  const refreshTargets = chosen.length > 0 ? chosen : importable.slice(0, MAX_SELECTION).map(entry => entry.provider)
   const refreshLabel = phase === 'refresh' ? '读取中…'
-    : selected.length > 0 ? `读取所选 (${selected.length})`
+    : chosen.length > 0 ? `读取所选 (${chosen.length})`
     : importable.length > 0 ? `读取全部 (${refreshTargets.length})` : '读取模型列表'
   const button = (label: string, onClick: () => void, options: { disabled?: boolean; primary?: boolean; danger?: boolean; link?: boolean } = {}) =>
     h('button', {
@@ -131,6 +143,14 @@ export function ImportPanel({ remote }: ImportPanelProps) {
   const row = (key: string, head: ReactNode[], body: ReactNode[]) =>
     h('li', { key, className: 'dsh-ccswitch-import-card' }, h('div', { className: 'dsh-ccswitch-import-row-head' }, ...head), ...body)
 
+  /** A one-line peek at the catalog so "only one model?" is answerable without importing. */
+  const sample = (entry: ImportRow): ReactNode => {
+    const ids = entry.sample ?? []
+    if (ids.length === 0) return null
+    const more = entry.models > ids.length ? ` …（共 ${entry.models} 个）` : ''
+    return status(`模型：${ids.join('、')}${more}`)
+  }
+
   const importableRow = (entry: ImportRow) => row(entry.provider, [
     h('label', { className: 'dsh-ccswitch-import-check', key: 'check' },
       h('input', { type: 'checkbox', checked: selected.includes(entry.provider), disabled: busy, onChange: () => toggle(entry.provider) }),
@@ -138,7 +158,10 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     ),
     tag(APP_LABEL[entry.appType] ?? entry.appType, 'app'),
     tag(`${entry.models} 个模型`, 'models'),
-  ], [status(`${DISCOVERY[entry.discovery]}${entry.discovery === 'failed' ? '；可在导入后手动补充模型 ID' : ''}`, entry.discovery === 'failed' ? 'warn' : 'muted')])
+  ], [
+    sample(entry),
+    status(`${DISCOVERY[entry.discovery]}${entry.discovery === 'failed' ? '；可在导入后手动补充模型 ID' : ''}`, entry.discovery === 'failed' ? 'warn' : 'muted'),
+  ])
 
   const importedRow = (entry: ImportRow) => row(entry.provider, [
     h('span', { className: 'dsh-ccswitch-import-name', key: 'name' }, entry.name),
@@ -151,9 +174,14 @@ export function ImportPanel({ remote }: ImportPanelProps) {
         : button('移除', () => setConfirming(entry.provider), { danger: true }),
     ),
   ], [
+    sample(entry),
     h('p', { className: 'dsh-ccswitch-import-status', key: 'state' },
       h('span', { className: `dsh-ccswitch-import-dot${entry.credential === 'missing' ? ' is-missing' : ''}` }),
-      entry.credential === 'missing' ? '已导入，但密钥条目不见了；移除后重新导入可恢复。' : '已导入：模型里只保留这一份，CC Switch 的改动不会覆盖它。'),
+      entry.credential === 'missing'
+        ? '已导入，但密钥条目不见了；移除后重新导入可恢复。'
+        : entry.models === 0
+          ? '已导入，但这个供应商当前没有任何模型；可以在上方卡片里添加模型 ID。'
+          : '已导入：模型里只保留这一份，CC Switch 的改动不会覆盖它。'),
     status(confirming === entry.provider
       ? '移除会删除这个 DSH 原生供应商，并同时删除该线路写入的密钥条目。'
       : '“更新模型”会重新读取接口模型列表，保留你手动添加的模型与现有密钥。'),
@@ -165,29 +193,30 @@ export function ImportPanel({ remote }: ImportPanelProps) {
       button(phase === 'reload' ? '读取中…' : '重新载入线路', () => void reloadRoutes(), { link: true }),
     ),
     h('p', { className: 'dsh-ccswitch-import-intro' },
-      '导入后该线路成为 DSH 原生供应商：密钥写入 DSH 凭据存储，模型列表里只保留这一份，之后由 DSH 独立管理。导入成功后会出现在本页上方的供应商卡片里。'),
+      '不导入也能用：所有 CC Switch 线路已经在模型选择器里以「CC Switch ·」分组出现。导入只是把某条线路固定成 DSH 原生供应商，便于改显示名、单独调参或手动增删模型；导入后它的密钥写入 DSH 凭据存储，模型列表里只保留这一份，并出现在本页上方的供应商卡片里。'),
     view !== undefined && !view.available ? h('p', { className: 'dsh-ccswitch-import-notice is-warn', role: 'alert' }, '需要先在 DSH 设置中启用 llm-pi-ai 原生模型适配器，才能导入线路。') : null,
     view !== undefined && view.available && !view.writable ? h('p', { className: 'dsh-ccswitch-import-notice is-warn', role: 'alert' }, '当前 DSH 配置是只读的，无法写入供应商。') : null,
     failure ? h('p', { className: 'dsh-ccswitch-import-notice is-error', role: 'alert' }, failure) : null,
     h('div', { className: 'dsh-ccswitch-import-toolbar' },
       h('input', {
         type: 'search', className: 'dsh-ccswitch-import-search',
-        placeholder: '筛选：线路名 / Claude / Codex / Gemini / 协议',
+        placeholder: '筛选：线路名 / Claude / Codex / Gemini / 协议 / 模型 ID',
         'aria-label': '筛选 CC Switch 线路', value: filter,
         onChange: event => setFilter(event.currentTarget.value),
       }),
-      h('span', { className: 'dsh-ccswitch-import-count' }, `可导入 ${importable.length} · 已选 ${selected.length}`),
+      h('span', { className: 'dsh-ccswitch-import-count' },
+        `可导入 ${importable.length} · 已选 ${chosen.length}${imported.length > 0 ? ` · 已导入 ${imported.length}` : ''}`),
       button(refreshLabel, () => void refreshSelected(refreshTargets), { disabled: refreshTargets.length === 0 }),
-      button(phase === 'import' ? '导入中…' : `导入所选 (${selected.length})`, () => void importSelected(), { primary: true, disabled: selected.length === 0 }),
+      button(phase === 'import' ? '导入中…' : `导入所选 (${chosen.length})`, () => void importSelected(), { primary: true, disabled: chosen.length === 0 }),
     ),
-    selected.length >= MAX_SELECTION && importable.length > MAX_SELECTION
+    chosen.length >= MAX_SELECTION && importable.length > MAX_SELECTION
       ? h('p', { className: 'dsh-ccswitch-import-notice is-warn' }, `一次最多导入 ${MAX_SELECTION} 条，已选中前 ${MAX_SELECTION} 条；其余请分批导入。`) : null,
     progress ? h('div', { className: 'dsh-ccswitch-import-progress', role: 'status', 'aria-live': 'polite' }, progress) : null,
     importable.length > 0 ? h('div', { className: 'dsh-ccswitch-import-group' },
       h('div', { className: 'dsh-ccswitch-import-group-head' },
         h('span', { className: 'dsh-ccswitch-import-group-title' }, `可导入 ${importable.length}`),
-        button(selected.length >= importable.length && importable.length > 0 ? '取消全选' : '全选', () => setSelected(
-          selected.length >= importable.length && importable.length > 0 ? [] : importable.slice(0, MAX_SELECTION).map(entry => entry.provider),
+        button(allChosen ? '取消全选' : '全选', () => setSelected(
+          allChosen ? [] : importable.slice(0, MAX_SELECTION).map(entry => entry.provider),
         ), { link: true }),
       ),
       h('ul', { className: 'dsh-ccswitch-import-rows' }, importable.map(importableRow)),
@@ -202,7 +231,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
         h('span', { className: 'dsh-ccswitch-import-name', key: 'name' }, entry.name),
         tag(APP_LABEL[entry.appType] ?? entry.appType, 'app'),
         tag(`${entry.models} 个模型`, 'models'),
-      ], [status(dynamicNote(entry))]))),
+      ], [status(dynamicNote(entry)), sample(entry)]))),
     ) : null,
     view !== undefined && rows.length === 0 ? h('div', { className: 'dsh-ccswitch-import-status-block' },
       view.rows.length === 0

@@ -86,6 +86,9 @@ test('native import stores only a key reference, preserves native providers, and
   assert.equal(imported.credential, 'configured')
   assert.equal(imported.eligible, false)
   assert.match(imported.reason, /已导入/)
+  // The row must report what DSH owns now, not what CC Switch lists.
+  assert.equal(imported.models, 1)
+  assert.deepEqual(imported.sample, [model.id])
   f.keys.clear()
   assert.equal((await f.importer.list()).rows[0].credential, 'missing')
   f.keys.set(profile.apiKeyEnv, 'synthetic-key-never-output')
@@ -95,6 +98,8 @@ test('native import stores only a key reference, preserves native providers, and
   assert.equal((await f.importer.importProviders([f.routes[0].provider], signal()))[0].status, 'skipped')
   assert.equal(profile.displayName, 'User changed in DSH')
   assert.equal(profile.models[0].id, 'user-added')
+  const handEdited = (await f.importer.list()).rows[0]
+  assert.deepEqual(handEdited.sample, ['user-added'], 'hand-added models are what the user sees after import')
   assert.equal(f.credentialReads(), 1)
   assert.equal(f.ops.length, 1)
   // Importing fetches a missing interface catalog for the user, and does not
@@ -150,10 +155,19 @@ test('a route with no known model is refreshed before it is imported', async () 
   const rows = (await f.importer.list()).rows
   assert.equal(rows[0].eligible, false)
   assert.match(rows[0].reason, /还没有可用模型/)
+  assert.deepEqual(rows[0].sample, [], 'an empty catalog has nothing to sample')
   const outcomes = await f.importer.importProviders([f.routes[0].provider], signal())
   assert.equal(outcomes[0].status, 'imported')
   assert.equal(f.refreshes(), 1)
   assert.equal(f.providers[importedProviderId(f.routes[0])].models.length, 1)
+})
+
+test('every row samples at most three model ids for orientation', async () => {
+  const many = ['one', 'two', 'three', 'four'].map(id => ({ ...model, id }))
+  const f = fixture({ routes: [route({ models: many })] })
+  const [row] = (await f.importer.list()).rows
+  assert.equal(row.models, 4)
+  assert.deepEqual(row.sample, ['one', 'two', 'three'])
 })
 
 test('an already fetched catalog is not fetched again on import', async () => {

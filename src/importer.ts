@@ -35,6 +35,13 @@ export function importedProviderId(route: Pick<CcSwitchRoute, 'provider' | 'appT
 }
 const appLabel = (appType: string): string => appType === 'claude' ? 'Claude' : appType === 'codex' ? 'Codex' : appType === 'gemini' ? 'Gemini' : appType
 function profiles(view: SettingsDescriptor): Record<string, unknown> { return record(record(view.value).providers) }
+/** Model ids held by a DSH provider profile — the real catalog once a route is imported. */
+function profileModelIds(profile: unknown): string[] {
+  const models = record(profile).models
+  return Array.isArray(models)
+    ? models.map(entry => typeof entry === 'string' ? entry : String(record(entry).id ?? '')).filter(id => id !== '')
+    : []
+}
 function protocols(view: SettingsDescriptor): string[] {
   const serialized = record(view.schema)
   const refs = record(serialized.refs)
@@ -104,8 +111,13 @@ export class CcSwitchImporter {
   /** Pure read: no await, no network. `importProviders` re-runs it after refreshing. */
   private inspect(route: CcSwitchRoute, native: SettingsDescriptor | undefined, supported: readonly string[]): Inspection {
     const targetProvider = importedProviderId(route)
-    const imported = native !== undefined && own(profiles(native), targetProvider)
-    const models = this.deps.models(route).length
+    const owned = native === undefined ? undefined : profiles(native)[targetProvider]
+    const imported = owned !== undefined
+    const found = this.deps.models(route)
+    // Once imported, DSH owns the catalog: report what DSH will actually offer,
+    // not what CC Switch happens to list today.
+    const ids = imported ? profileModelIds(owned) : found.map(model => model.id)
+    const models = ids.length
     const writable = this.deps.settings.writable
     const dynamicOnly = route.authKind !== 'api-key'
     const unsupported = native !== undefined && !supported.includes(route.protocol)
@@ -120,7 +132,8 @@ export class CcSwitchImporter {
     return {
       row: {
         provider: route.provider, targetProvider, name: route.name, appType: route.appType,
-        protocol: route.protocol, models, discovery: this.deps.discovery(route.provider),
+        protocol: route.protocol, models, sample: ids.slice(0, 3),
+        discovery: this.deps.discovery(route.provider),
         imported, eligible: reason === '', reason,
       },
       refreshable,

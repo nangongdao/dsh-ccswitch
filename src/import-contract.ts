@@ -7,6 +7,12 @@ export interface ImportRow {
   appType: string
   protocol: string
   models: number
+  /**
+   * A few model ids to orient the user before importing ("why does this route
+   * only have one model?"). Truncated on purpose: the full catalog is the
+   * provider card's job once the route is imported.
+   */
+  sample?: string[]
   discovery: 'configured' | 'pending' | 'remote' | 'failed'
   imported: boolean
   /** Only meaningful for imported routes: whether the written key is still there. */
