@@ -17,7 +17,7 @@
 macOS、Windows PowerShell 和 Linux 都可以执行：
 
 ```bash
-dsh plugin --profile web add github:upJiang/dsh-ccswitch
+dsh plugin --profile web add github:nangongdao/dsh-ccswitch
 ```
 
 安装完成后重启 DSH。前台运行时先按 `Ctrl+C` 停止，再重新启动：

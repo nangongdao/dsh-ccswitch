@@ -5,11 +5,11 @@
   "packageManager": "pnpm@11.7.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/upJiang/dsh-ccswitch.git"
+    "url": "git+https://github.com/nangongdao/dsh-ccswitch.git"
   },
-  "homepage": "https://github.com/upJiang/dsh-ccswitch#readme",
+  "homepage": "https://github.com/nangongdao/dsh-ccswitch#readme",
   "bugs": {
-    "url": "https://github.com/upJiang/dsh-ccswitch/issues"
+    "url": "https://github.com/nangongdao/dsh-ccswitch/issues"
   },
   "license": "MIT",
   "engines": {
@@ -42,11 +42,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-attachment": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-brand": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-fs": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-timeout": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-attachment": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-brand": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-fs": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-timeout": "^0.2.0-rc.2",
     "@earendil-works/pi-ai": "^0.87.1"
   },
   "devDependencies": {
@@ -71,11 +71,6 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-model-selection"
       ]
-    },
-    "compatibility": {
-      "dshReleases": {
-        "0.2.0-rc.2": "compatible"
-      }
     }
   }
 }
