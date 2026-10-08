@@ -71,7 +71,15 @@ Windows：
 
 正常情况下不需要设置路径，插件会自动查找当前用户的 CC Switch 数据库。
 
-如果在 CC Switch 中使用了自定义数据目录、便携目录或同步盘，需要告诉插件数据库的位置。
+如果 CC Switch 是通过「设置 → 数据目录」改到了别处（例如 `D:\.cc-switch`），也不需要手工配置：插件会读取 CC Switch 自己写下的 `app_paths.json`，跟随其中的 `app_config_dir_override` 去找 `cc-switch.db`。该文件位于：
+
+- Windows：`%APPDATA%\com.ccswitch.desktop\app_paths.json`
+- macOS：`~/Library/Application Support/com.ccswitch.desktop/app_paths.json`
+- Linux：`~/.config/com.ccswitch.desktop/app_paths.json`
+
+只有当这个目录已经不存在（CC Switch 自身也会回退到默认目录）或该文件不可读时，插件才回退到 `~/.cc-switch/cc-switch.db`。
+
+仍然可以用环境变量直接指定数据库，此时插件不再读取上述文件，该值优先级最高：
 
 macOS/Linux：
 
@@ -104,16 +112,18 @@ dsh web --host 127.0.0.1 --port 3080
 2. CC Switch 中的模型是否可以正常请求。
 3. 安装插件后是否重启并刷新了 DSH。
 4. 是否配置了错误的 `ccswitch-providers.json` 筛选条件。
-5. 使用自定义 CC Switch 目录时，`DSH_CCSWITCH_DB` 是否指向正确的 `cc-switch.db` 文件。
+5. 使用自定义 CC Switch 目录时，确认 CC Switch 中的「数据目录」仍然存在；仍看不到模型时，用 `DSH_CCSWITCH_DB` 显式指向正确的 `cc-switch.db` 文件（见上一节）。
 
 如果市场提示 `@google/genai` 或 `protobufjs` 的构建脚本被 pnpm 拦截，请更新到 `dsh-ccswitch` `0.1.1` 或更高版本后重新安装。新版会使用 DSH 已提供的运行时依赖，不需要为这两个包单独放行构建脚本。
 
 ## 版本兼容
 
-`dsh-ccswitch` `0.2.0` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
+`dsh-ccswitch` `0.2.1` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
 
 - DSH `0.2.0-rc.2` 及后续 `0.2.x`：使用本版本。
 - DSH `0.1.x`（含 `0.1.0-rc.7`）：请继续使用 `dsh-ccswitch` `0.1.1`，本版本不向下兼容。
+
+`0.2.1` 修复了 CC Switch 使用自定义数据目录时看不到 provider 的问题：插件会读取 CC Switch 的 `app_paths.json` 跟随实际数据目录，不再只认 `~/.cc-switch`。
 
 这一版随 DSH 0.2 的类型变更同步了适配层：工具调用 ID 改用 `ToolCallId`，消息模型区分 `role: 'tool'` 的独立工具结果消息，请求上下文改用 `TranscriptContext`，并接入了 DSH 的流空闲超时看门狗与图片请求预算（超限时按 DSH 的 `IMAGE_OFFLOAD_REQUIRED` 语义报错）。
 
