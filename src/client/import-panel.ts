@@ -14,8 +14,22 @@ const DISCOVERY: Record<ImportRow['discovery'], string> = {
 /** One request per chunk keeps a long import responsive and gives real progress. */
 const CHUNK = 5
 const MAX_SELECTION = 128
+/** Selection key for a group-wide confirmation, which has no single provider. */
+const BATCH = '*'
+const VERB: Record<'import' | 'update' | 'key' | 'remove', string> = {
+  import: '正在导入', update: '正在更新模型', key: '正在写回密钥', remove: '正在移除',
+}
 type Phase = '' | 'reload' | 'refresh' | 'import' | 'update' | 'key' | 'remove'
-interface Feedback { key: string; tone: 'success' | 'warn' | 'error'; text: string }
+/** One outcome, kept per provider so its own row can explain what happened. */
+interface Feedback {
+  key: string
+  name: string
+  tone: 'success' | 'warn' | 'error'
+  /** The importer's message, shown on the row it came from. */
+  message: string
+  /** The same message prefixed with the route name, for the summary list. */
+  text: string
+}
 
 const toneOf = (status: ImportOutcome['status']): Feedback['tone'] =>
   status === 'skipped' ? 'warn' : status === 'failed' ? 'error' : 'success'
@@ -23,6 +37,7 @@ const toneOf = (status: ImportOutcome['status']): Feedback['tone'] =>
 export function ImportPanel({ remote }: ImportPanelProps) {
   const [view, setView] = useState<ImportView>()
   const [selected, setSelected] = useState<string[]>([])
+  const [marked, setMarked] = useState<string[]>([])
   const [filter, setFilter] = useState('')
   const [phase, setPhase] = useState<Phase>('')
   const [failure, setFailure] = useState('')
@@ -35,6 +50,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     if (!answer.ok) throw new Error(answer.error.message)
     setView(answer.value)
     setSelected(current => current.filter(id => answer.value.rows.some(row => row.provider === id && row.eligible)))
+    setMarked(current => current.filter(id => answer.value.rows.some(row => row.provider === id && row.imported)))
     return answer.value
   }
   useEffect(() => {
@@ -48,11 +64,10 @@ export function ImportPanel({ remote }: ImportPanelProps) {
   }, [remote])
 
   const report = (outcomes: readonly ImportOutcome[], rows: readonly ImportRow[]) => {
-    setFeedback(outcomes.map(outcome => ({
-      key: outcome.provider,
-      tone: toneOf(outcome.status),
-      text: `${rows.find(row => row.provider === outcome.provider)?.name ?? '该线路'}：${outcome.message}`,
-    })))
+    setFeedback(outcomes.map(outcome => {
+      const name = rows.find(row => row.provider === outcome.provider)?.name ?? '该线路'
+      return { key: outcome.provider, name, tone: toneOf(outcome.status), message: outcome.message, text: `${name}：${outcome.message}` }
+    }))
   }
   const guard = async (next: Phase, action: () => Promise<void>) => {
     if (phase !== '') return
@@ -72,35 +87,64 @@ export function ImportPanel({ remote }: ImportPanelProps) {
   const reloadRoutes = () => guard('reload', async () => { setFeedback([]); await reload() })
   const importSelected = () => guard('import', async () => {
     setFeedback([])
-    const rows = view?.rows ?? []
+    const targets = [...chosen]
     const outcomes: ImportOutcome[] = []
     // The importer re-reads the interface model list for each chunk before it
     // writes, so importing never needs a separate refresh step first.
-    for (let offset = 0; offset < chosen.length; offset += CHUNK) {
-      const chunk = chosen.slice(offset, offset + CHUNK)
-      setProgress(`正在导入 ${Math.min(offset + chunk.length, chosen.length)}/${chosen.length}…`)
-      const answer = await remote.importProviders(chunk)
-      if (!answer.ok) throw new Error(answer.error.message)
-      outcomes.push(...answer.value)
-      report(outcomes, rows)
+    for (let offset = 0; offset < targets.length; offset += CHUNK) {
+      const chunk = targets.slice(offset, offset + CHUNK)
+      setProgress(`${VERB.import} ${Math.min(offset + chunk.length, targets.length)}/${targets.length}…`)
+      let refused = ''
+      try {
+        const answer = await remote.importProviders(chunk)
+        if (answer.ok) outcomes.push(...answer.value)
+        else refused = '导入请求未完成，这一批没有写入。'
+      } catch { refused = '导入请求未完成，这一批没有写入。' }
+      if (refused !== '') {
+        for (const provider of chunk) outcomes.push({ provider, status: 'failed', message: refused })
+        break
+      }
     }
+    // Reload even after a mid-way refusal: the chunks that did land must stop
+    // looking importable, and the ones that failed stay selected for a retry.
     const fresh = await reload()
     report(outcomes, fresh.rows)
-    // Keep only the ones that failed so a retry after fixing the cause is one click.
     const failed = new Set(outcomes.filter(outcome => outcome.status === 'failed').map(outcome => outcome.provider))
     setSelected(current => current.filter(id => failed.has(id)))
   })
-  const runOne = (provider: string, kind: 'update' | 'key' | 'remove') => guard(kind, async () => {
-    const rows = view?.rows ?? []
+  /**
+   * One action over one or many imported routes. A batch is the reason this
+   * exists: rotating a key in CC Switch should not mean twenty confirmations,
+   * and a partial failure must leave the routes that did not go through marked
+   * so the next click is a retry rather than a re-selection.
+   */
+  const runTargets = (kind: 'update' | 'key' | 'remove', targets: readonly string[]) => guard(kind, async () => {
+    if (targets.length === 0) return
     setFeedback([])
     setConfirming('')
-    const answer = kind === 'update' ? await remote.resync([provider])
-      : kind === 'key' ? await remote.refreshKey([provider])
-      : await remote.remove([provider])
-    if (!answer.ok) throw new Error(answer.error.message)
+    const outcomes: ImportOutcome[] = []
+    for (let offset = 0; offset < targets.length; offset += CHUNK) {
+      const chunk = targets.slice(offset, offset + CHUNK)
+      setProgress(`${VERB[kind]} ${Math.min(offset + chunk.length, targets.length)}/${targets.length}…`)
+      let refused = ''
+      try {
+        const answer = kind === 'update' ? await remote.resync(chunk)
+          : kind === 'key' ? await remote.refreshKey(chunk)
+          : await remote.remove(chunk)
+        if (answer.ok) outcomes.push(...answer.value)
+        else refused = '这次操作没有完成，未做改动。'
+      } catch { refused = '这次操作没有完成，未做改动。' }
+      if (refused !== '') {
+        for (const provider of chunk) outcomes.push({ provider, status: 'failed', message: refused })
+        break
+      }
+    }
     const fresh = await reload()
-    report(answer.value, fresh.rows)
+    report(outcomes, fresh.rows)
+    const failed = new Set(outcomes.filter(outcome => outcome.status === 'failed').map(outcome => outcome.provider))
+    setMarked(current => current.filter(id => failed.has(id)))
   })
+  const runOne = (provider: string, kind: 'update' | 'key' | 'remove') => runTargets(kind, [provider])
   const toggle = (provider: string) => setSelected(current => {
     const live = current.filter(id => importableIds.includes(id))
     if (live.includes(provider)) return live.filter(id => id !== provider)
@@ -116,8 +160,11 @@ export function ImportPanel({ remote }: ImportPanelProps) {
   // no longer selectable. The unfiltered list is the reference, so filtering
   // the list never silently drops a selection.
   const importableIds = (view?.rows ?? []).filter(row => row.eligible && !row.imported).map(row => row.provider)
+  const importedIds = (view?.rows ?? []).filter(row => row.imported).map(row => row.provider)
   const chosen = selected.filter(id => importableIds.includes(id))
+  const markedLive = marked.filter(id => importedIds.includes(id))
   const allChosen = importable.length > 0 && importable.every(entry => chosen.includes(entry.provider))
+  const allMarked = imported.length > 0 && imported.every(entry => markedLive.includes(entry.provider))
   const busy = phase !== ''
   // With nothing selected the read button refreshes every importable route, so
   // the common "just tell me all the models" want is one click, not a select-all.
@@ -135,7 +182,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
   const tag = (text: string, key?: string) => h('span', { key, className: 'dsh-ccswitch-import-tag' }, text)
   /** A destructive action asks once: the row shows what it will do, then confirms. */
   const armed = (kind: 'key' | 'remove', provider: string) => confirming === `${kind}:${provider}`
-  const status = (text: string, tone: 'muted' | 'warn' | 'error' = 'muted') =>
+  const status = (text: string, tone: 'muted' | 'success' | 'warn' | 'error' = 'muted') =>
     h('p', { className: `dsh-ccswitch-import-status is-${tone}` }, text)
   /** Why this route is not importable, plus what the interface did last time. */
   const dynamicNote = (entry: ImportRow): string => {
@@ -154,10 +201,15 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     const more = entry.models > ids.length ? ` …（共 ${entry.models} 个）` : ''
     return status(`模型：${ids.join('、')}${more}`)
   }
+  /** What this exact route's last action produced, on the route itself. */
+  const note = (provider: string): ReactNode => {
+    const item = feedback.find(entry => entry.key === provider)
+    return item === undefined ? null : status(item.message, item.tone)
+  }
 
   const importableRow = (entry: ImportRow) => row(entry.provider, [
     h('label', { className: 'dsh-ccswitch-import-check', key: 'check' },
-      h('input', { type: 'checkbox', checked: selected.includes(entry.provider), disabled: busy, onChange: () => toggle(entry.provider) }),
+      h('input', { type: 'checkbox', checked: chosen.includes(entry.provider), disabled: busy, onChange: () => toggle(entry.provider) }),
       h('span', { className: 'dsh-ccswitch-import-name' }, entry.name),
     ),
     tag(APP_LABEL[entry.appType] ?? entry.appType, 'app'),
@@ -165,10 +217,22 @@ export function ImportPanel({ remote }: ImportPanelProps) {
   ], [
     sample(entry),
     status(`${DISCOVERY[entry.discovery]}${entry.discovery === 'failed' ? '；可在导入后手动补充模型 ID' : ''}`, entry.discovery === 'failed' ? 'warn' : 'muted'),
+    // A refused chunk keeps its routes selected for a retry; the reason has to be
+    // readable on the route itself, not only in the summary at the bottom.
+    note(entry.provider),
   ])
 
   const importedRow = (entry: ImportRow) => row(entry.provider, [
-    h('span', { className: 'dsh-ccswitch-import-name', key: 'name' }, entry.name),
+    h('label', { className: 'dsh-ccswitch-import-check', key: 'check' },
+      h('input', {
+        type: 'checkbox', checked: markedLive.includes(entry.provider), disabled: busy,
+        'aria-label': `选择 ${entry.name} 以批量操作`,
+        onChange: () => setMarked(current => current.filter(id => importedIds.includes(id)).includes(entry.provider)
+          ? current.filter(id => id !== entry.provider)
+          : [...current.filter(id => importedIds.includes(id)), entry.provider]),
+      }),
+      h('span', { className: 'dsh-ccswitch-import-name' }, entry.name),
+    ),
     tag(APP_LABEL[entry.appType] ?? entry.appType, 'app'),
     tag(`${entry.models} 个模型`, 'models'),
     h('span', { className: 'dsh-ccswitch-import-row-actions', key: 'actions' },
@@ -189,6 +253,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
         : entry.models === 0
           ? '已导入，但这个供应商当前没有任何模型；可以在上方卡片里添加模型 ID。'
           : '已导入：模型里只保留这一份，CC Switch 的改动不会覆盖它。'),
+    note(entry.provider),
     status(armed('remove', entry.provider)
       ? '移除会删除这个 DSH 原生供应商，并同时删除该线路写入的密钥条目。'
       : armed('key', entry.provider)
@@ -214,7 +279,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
         onChange: event => setFilter(event.currentTarget.value),
       }),
       h('span', { className: 'dsh-ccswitch-import-count' },
-        `可导入 ${importable.length} · 已选 ${chosen.length}${imported.length > 0 ? ` · 已导入 ${imported.length}` : ''}`),
+        `可导入 ${importable.length} · 已选 ${chosen.length}${imported.length > 0 ? ` · 已导入 ${imported.length}${markedLive.length > 0 ? `（选中 ${markedLive.length}）` : ''}` : ''}`),
       button(refreshLabel, () => void refreshSelected(refreshTargets), { disabled: refreshTargets.length === 0 }),
       button(phase === 'import' ? '导入中…' : `导入所选 (${chosen.length})`, () => void importSelected(), { primary: true, disabled: chosen.length === 0 }),
     ),
@@ -231,7 +296,29 @@ export function ImportPanel({ remote }: ImportPanelProps) {
       h('ul', { className: 'dsh-ccswitch-import-rows' }, importable.map(importableRow)),
     ) : null,
     imported.length > 0 ? h('div', { className: 'dsh-ccswitch-import-group' },
-      h('span', { className: 'dsh-ccswitch-import-group-title' }, `已导入 ${imported.length}`),
+      h('div', { className: 'dsh-ccswitch-import-group-head' },
+        h('span', { className: 'dsh-ccswitch-import-group-title' }, `已导入 ${imported.length}`),
+        button(allMarked ? '取消全选' : '全选', () => setMarked(allMarked ? [] : imported.map(entry => entry.provider)), { link: true }),
+        h('span', { className: 'dsh-ccswitch-import-row-actions' },
+          // The count is always shown once something is marked: the group button
+          // and the per-row buttons would otherwise read exactly the same.
+          button(markedLive.length > 0 ? `更新模型 (${markedLive.length})` : '更新模型', () => void runTargets('update', markedLive), { disabled: markedLive.length === 0 }),
+          armed('key', BATCH)
+            ? button(`确认换密钥 (${markedLive.length})`, () => void runTargets('key', markedLive), { link: true })
+            : button(markedLive.length > 0 ? `更新密钥 (${markedLive.length})` : '更新密钥', () => setConfirming(`key:${BATCH}`), { link: true, disabled: markedLive.length === 0 }),
+          armed('remove', BATCH)
+            ? button(`确认移除 (${markedLive.length})`, () => void runTargets('remove', markedLive), { danger: true })
+            : button(markedLive.length > 0 ? `移除 (${markedLive.length})` : '移除', () => setConfirming(`remove:${BATCH}`), { danger: true, disabled: markedLive.length === 0 }),
+        ),
+      ),
+      armed('remove', BATCH)
+        ? h('p', { className: 'dsh-ccswitch-import-notice is-warn', role: 'alert' },
+          `确认移除会删除这 ${markedLive.length} 个 DSH 原生供应商，并同时删除它们写入的密钥条目。`)
+        : armed('key', BATCH)
+          ? h('p', { className: 'dsh-ccswitch-import-notice is-warn', role: 'alert' },
+            `确认换密钥会用 CC Switch 里这些线路当前的 API Key 覆盖 DSH 里保存的那一份；模型与其他设置不动。`)
+          : h('p', { className: 'dsh-ccswitch-import-status' },
+            '勾选后可以一次「更新模型」「更新密钥」或「移除」多条；只有没做成的会保持勾选，方便直接重试。'),
       h('ul', { className: 'dsh-ccswitch-import-rows' }, imported.map(importedRow)),
     ) : null,
     dynamic.length > 0 ? h('details', { className: 'dsh-ccswitch-import-dynamic' },

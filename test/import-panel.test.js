@@ -115,14 +115,18 @@ test('groups routes into importable, already imported and dynamic connections', 
   assert.equal(checkboxes(panel.container)[0].disabled, false)
   assert.equal(checkboxes(panel.container)[0].checked, false)
 
-  // Already imported: has its key state and its own actions, no checkbox.
+  // Already imported: has its key state, a batch checkbox and its own actions.
+  // (Compare a boolean, never a DOM node: a failing `assert.equal(node, null)`
+  // makes node:assert inspect the whole jsdom graph and dies on the way to a
+  // multi-gigabyte message with `RangeError: Array buffer allocation failed`.)
   const imported = groupRows(panel.container, 1)
   assert.equal(imported.length, 1)
   assert.match(imported[0].textContent, /已导入的 Gemini/)
   assert.match(imported[0].textContent, /只保留这一份/)
   assert.match(imported[0].textContent, /模型：gemini-2\.5-pro、gemini-2\.5-flash …（共 7 个）/)
   assert.ok(imported[0].querySelector('.dsh-ccswitch-import-dot'))
-  assert.equal(imported[0].querySelector('input[type="checkbox"]'), null)
+  assert.equal(imported[0].querySelector('input[type="checkbox"]') !== null, true)
+  assert.equal(imported[0].querySelector('input[type="checkbox"]').getAttribute('aria-label'), '选择 已导入的 Gemini 以批量操作')
   assert.ok(button(imported[0], '更新模型'))
   assert.ok(button(imported[0], '移除'))
 
@@ -132,7 +136,7 @@ test('groups routes into importable, already imported and dynamic connections', 
   assert.match(dynamic.textContent, /公司 Codex/)
   assert.match(dynamic.textContent, /OAuth\/登录令牌保持 CC Switch 动态连接/)
   assert.match(dynamic.textContent, /模型：gpt-5\.1-codex/, 'a dynamic route still shows what it would offer')
-  assert.equal(dynamic.querySelector('input[type="checkbox"]'), null)
+  assert.equal(dynamic.querySelector('input[type="checkbox"]') !== null, false)
 
   assert.match(count(panel.container), /可导入 1 · 已选 0/)
   assert.deepEqual(calls, [['list']])
@@ -308,7 +312,7 @@ test('a missing key and an empty catalog are reported instead of hidden', async 
   await panel.unmount()
 })
 
-test('a failed import keeps the panel usable and never echoes the upstream error', async () => {
+test('a refused import keeps the route selected and never echoes the upstream error', async () => {
   const { remote } = stub({
     importProviders: async () => ({ ok: false, error: { message: 'sk-secret upstream failure' } }),
   })
@@ -317,10 +321,78 @@ test('a failed import keeps the panel usable and never echoes the upstream error
   await panel.click(button(panel.container, '全选'))
   await panel.click(button(panel.container, '导入所选'))
 
-  const alert = panel.container.querySelector('[role="alert"]')
-  assert.match(alert.textContent, /操作未完成/)
+  // The remote refused the whole chunk, so the panel reports the failure on the
+  // route itself and keeps it selected for a retry — and the upstream message,
+  // which can carry a key, must never reach the page.
+  const feedback = panel.container.querySelector('.dsh-ccswitch-import-feedback')
+  assert.match(feedback.textContent, /失败 1/)
+  assert.match(feedback.textContent, /导入请求未完成，这一批没有写入/)
+  assert.match(groupRows(panel.container, 0)[0].textContent, /导入请求未完成，这一批没有写入/)
+  assert.match(count(panel.container), /已选 1/, 'a refused import stays selected so the retry is one click')
   assert.doesNotMatch(panel.container.textContent, /sk-secret/)
   assert.equal(button(panel.container, '导入所选').disabled, false)
+  await panel.unmount()
+})
+
+test('runs one action over every marked import and keeps only the failures marked', async () => {
+  const rows = [
+    claude, installed,
+    { ...installed, provider: 'p-a', targetProvider: 'ccswitch-gemini-a', name: '线路 A' },
+    { ...installed, provider: 'p-b', targetProvider: 'ccswitch-gemini-b', name: '线路 B' },
+    { ...installed, provider: 'p-c', targetProvider: 'ccswitch-gemini-c', name: '线路 C' },
+  ]
+  const calls = []
+  const ok = value => ({ ok: true, value })
+  // One route refuses mid-batch: the other three must still go through, and the
+  // refused one is the only thing left marked so the retry is one click.
+  const map = (kind, providers) => {
+    calls.push([kind, providers])
+    return ok(providers.map(provider => provider === 'p-b'
+      ? { provider, status: 'failed', message: '线路在更新过程中发生变化，请重新读取后再试。' }
+      : { provider, status: 'updated', message: '已同步 7 个模型；密钥与其他设置未改动。' }))
+  }
+  const { remote } = stub({
+    list: async () => { calls.push(['list']); return ok(view({ rows })) },
+    resync: async providers => map('resync', providers),
+    refreshKey: async providers => map('refreshKey', providers),
+    remove: async providers => map('remove', providers),
+  })
+  const panel = await render(remote)
+  const markedRow = name => Array.from(panel.container.querySelectorAll('li'))
+    .find(element => element.querySelector(`input[aria-label="选择 ${name} 以批量操作"]`))
+  const checked = name => markedRow(name).querySelector('input[type="checkbox"]').checked
+  const groupButtons = () => Array.from(
+    groups(panel.container)[1].querySelector('.dsh-ccswitch-import-group-head')
+      .querySelector('.dsh-ccswitch-import-row-actions').querySelectorAll('button'),
+  )
+
+  assert.match(count(panel.container), /已导入 4/)
+  assert.equal(groupButtons().every(element => element.disabled), true,
+    'with nothing marked the batch actions must be inert')
+
+  await panel.click(button(groups(panel.container)[1], '全选'))
+  assert.match(count(panel.container), /已导入 4（选中 4）/)
+  assert.equal(groupButtons()[0].textContent, '更新模型 (4)')
+
+  await panel.click(button(panel.container, '更新模型 (4)'))
+  assert.deepEqual(calls, [['list'], ['resync', ['p-gemini', 'p-a', 'p-b', 'p-c']], ['list']])
+  const feedback = panel.container.querySelector('.dsh-ccswitch-import-feedback')
+  assert.match(feedback.textContent, /最近一次操作：成功 3 · 跳过 0 · 失败 1/)
+  assert.match(feedback.textContent, /线路 B：线路在更新过程中发生变化/)
+  assert.match(markedRow('线路 B').textContent, /线路在更新过程中发生变化/, 'the failing route explains itself')
+  assert.equal(checked('线路 B'), true, 'only the failure stays marked')
+  assert.equal(checked('线路 A'), false)
+  assert.equal(checked('已导入的 Gemini'), false)
+  assert.equal(button(panel.container, '更新模型 (1)').textContent, '更新模型 (1)')
+
+  // A destructive batch still asks once, and the warning names the batch size.
+  calls.length = 0
+  await panel.click(button(panel.container, '移除 (1)'))
+  assert.deepEqual(calls, [], 'removing must confirm before it writes')
+  assert.match(panel.container.querySelector('[role="alert"]').textContent, /确认移除会删除这 1 个 DSH 原生供应商/)
+  await panel.click(button(panel.container, '确认移除 (1)'))
+  assert.deepEqual(calls, [['remove', ['p-b']], ['list']])
+
   await panel.unmount()
 })
 
