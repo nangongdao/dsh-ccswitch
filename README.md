@@ -20,6 +20,14 @@ macOS、Windows PowerShell 和 Linux 都可以执行：
 dsh plugin --profile web add github:nangongdao/dsh-ccswitch
 ```
 
+`--profile` 必须和 DSH 实际使用的 profile 一致，否则插件会装到另一个 profile 里、界面中不会出现。命令行 `dsh web` 用的是 `web`；DSH 桌面版用的是 `desktop`：
+
+```bash
+dsh plugin --profile desktop add github:nangongdao/dsh-ccswitch
+```
+
+不确定时可以先看 `$DSH_HOME/profiles` 下有哪些目录（Windows 默认 `%USERPROFILE%\.dsh\profiles`），或者直接用 DSH 界面里的插件市场安装。
+
 安装完成后重启 DSH。前台运行时先按 `Ctrl+C` 停止，再重新启动：
 
 ```bash
@@ -111,8 +119,9 @@ dsh web --host 127.0.0.1 --port 3080
 1. CC Switch 中是否已经添加并启用了 provider。
 2. CC Switch 中的模型是否可以正常请求。
 3. 安装插件后是否重启并刷新了 DSH。
-4. 是否配置了错误的 `ccswitch-providers.json` 筛选条件。
-5. 使用自定义 CC Switch 目录时，确认 CC Switch 中的「数据目录」仍然存在；仍看不到模型时，用 `DSH_CCSWITCH_DB` 显式指向正确的 `cc-switch.db` 文件（见上一节）。
+4. 安装时 `--profile` 是否和 DSH 实际使用的 profile 一致（桌面版为 `desktop`，命令行 `dsh web` 为 `web`）。
+5. 是否配置了错误的 `ccswitch-providers.json` 筛选条件。
+6. 使用自定义 CC Switch 目录时，确认 CC Switch 中的「数据目录」仍然存在；仍看不到模型时，用 `DSH_CCSWITCH_DB` 显式指向正确的 `cc-switch.db` 文件（见上一节）。
 
 如果市场提示 `@google/genai` 或 `protobufjs` 的构建脚本被 pnpm 拦截，请更新到 `dsh-ccswitch` `0.1.1` 或更高版本后重新安装。新版会使用 DSH 已提供的运行时依赖，不需要为这两个包单独放行构建脚本。
 
