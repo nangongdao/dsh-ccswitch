@@ -119,11 +119,15 @@ export class CcSwitchImporter {
     const ids = imported ? profileModelIds(owned) : found.map(model => model.id)
     const models = ids.length
     const writable = this.deps.settings.writable
+    // Only a rotating OAuth login token is unsafe to copy: the copy would go
+    // stale on the next refresh. The classifier keeps exactly those tokens on
+    // `claude-token`/`codex-oauth`/`gemini-oauth`; a static relay key — however
+    // CC Switch happened to store it — is `api-key` and importable.
     const dynamicOnly = route.authKind !== 'api-key'
     const unsupported = native !== undefined && !supported.includes(route.protocol)
     const refreshable = !imported && !dynamicOnly && native !== undefined && writable && !unsupported
     const reason = imported ? '已导入：模型里只保留这一份，CC Switch 的改动不会覆盖它。'
-      : dynamicOnly ? 'OAuth/登录令牌保持 CC Switch 动态连接，不复制短期令牌。'
+      : dynamicOnly ? 'OAuth 登录令牌会轮换，保持 CC Switch 动态连接，不复制短期令牌。'
       : native === undefined ? '需要先在 DSH 中启用 llm-pi-ai 原生模型适配器。'
       : unsupported ? '当前 DSH 原生适配器不支持此协议，保持插件动态连接。'
       : !writable ? '当前 DSH 配置为只读，无法写入供应商。'

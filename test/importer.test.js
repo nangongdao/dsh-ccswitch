@@ -151,17 +151,40 @@ test('translates the pi-ai thinking map into valid native reasoning efforts', ()
   assert.deepEqual(nativeReasoningEfforts({ off: 'none', high: 'high' }), { off: 'none', high: 'high' })
 })
 
-test('OAuth and unsupported native protocols are skipped without reading their credentials', async () => {
-  const f = fixture({ routes: [route({ authKind: 'codex-oauth' }), route({ provider: 'ccswitch/gemini/g', appType: 'gemini', protocol: 'google-generative-ai' })] })
+test('OAuth login tokens and unsupported native protocols are skipped without reading their credentials', async () => {
+  const f = fixture({
+    routes: [
+      route({ authKind: 'codex-oauth' }),
+      // A genuine rotating Claude Code token must stay on the dynamic
+      // connection; the classifier writes exactly those routes as `claude-token`.
+      route({ provider: 'ccswitch/claude/c', appType: 'claude', protocol: 'anthropic-messages', authKind: 'claude-token' }),
+      route({ provider: 'ccswitch/gemini/g', appType: 'gemini', protocol: 'google-generative-ai' }),
+    ],
+  })
   const rows = (await f.importer.list()).rows
   assert.ok(rows.every(row => !row.eligible))
   assert.match(rows[0].reason, /OAuth/)
-  assert.match(rows[1].reason, /不支持此协议/)
+  assert.match(rows[1].reason, /OAuth/)
+  assert.match(rows[2].reason, /不支持此协议/)
   const result = await f.importer.importProviders(f.routes.map(route => route.provider), signal())
   assert.ok(result.every(outcome => outcome.status === 'skipped'))
   assert.equal(f.credentialReads(), 0)
   assert.equal(f.refreshes(), 0)
   assert.equal(f.keys.size, 0)
+})
+
+test('a Claude relay key is offered for import like any other static key', async () => {
+  // The classifier turns a relay key stored in ANTHROPIC_AUTH_TOKEN into
+  // `api-key`; the panel must therefore list it as importable, not hide it.
+  const f = fixture({
+    routes: [route({ provider: 'ccswitch/claude/relay', appType: 'claude', protocol: 'anthropic-messages', authKind: 'api-key' })],
+  })
+  const [row] = (await f.importer.list()).rows
+  assert.equal(row.eligible, true)
+  assert.equal(row.reason, '')
+  const outcome = await f.importer.importProviders([f.routes[0].provider], signal())
+  assert.equal(outcome[0].status, 'imported')
+  assert.equal(f.providers[importedProviderId(f.routes[0])].api, 'anthropic-messages')
 })
 
 test('a route with no known model is refreshed before it is imported', async () => {

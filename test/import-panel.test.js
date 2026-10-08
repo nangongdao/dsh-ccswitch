@@ -27,7 +27,7 @@ const oauth = {
   provider: 'p-codex', targetProvider: 'ccswitch-codex-2', name: '公司 Codex',
   appType: 'codex', protocol: 'openai-responses', models: 1,
   sample: ['gpt-5.1-codex'],
-  discovery: 'configured', imported: false, eligible: false, reason: 'OAuth/登录令牌保持 CC Switch 动态连接，不复制短期令牌。',
+  discovery: 'configured', imported: false, eligible: false, reason: 'OAuth 登录令牌会轮换，保持 CC Switch 动态连接，不复制短期令牌。',
 }
 const installed = {
   provider: 'p-gemini', targetProvider: 'ccswitch-gemini-3', name: '已导入的 Gemini',
@@ -141,7 +141,7 @@ test('groups routes into importable, already imported and dynamic connections', 
   const dynamic = panel.container.querySelector('details.dsh-ccswitch-import-dynamic')
   assert.match(dynamic.querySelector('summary').textContent, /保持 CC Switch 动态连接 1/)
   assert.match(dynamic.textContent, /公司 Codex/)
-  assert.match(dynamic.textContent, /OAuth\/登录令牌保持 CC Switch 动态连接/)
+  assert.match(dynamic.textContent, /OAuth 登录令牌会轮换，保持 CC Switch 动态连接/)
   assert.match(dynamic.textContent, /模型：gpt-5\.1-codex/, 'a dynamic route still shows what it would offer')
   assert.equal(dynamic.querySelector('input[type="checkbox"]') !== null, false)
 

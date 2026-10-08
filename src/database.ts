@@ -159,7 +159,18 @@ function parseConfiguredAuth(
   providerType: string | undefined,
 ): { kind: CcSwitchAuthKind; accountId?: string } {
   if (appType === 'claude') {
-    return { kind: envValue(settings, 'ANTHROPIC_AUTH_TOKEN') === undefined ? 'api-key' : 'claude-token' }
+    // CC Switch's Claude Code form writes ordinary third-party relay keys into
+    // `ANTHROPIC_AUTH_TOKEN`, so the field name says nothing about rotation.
+    // Measured against this machine's providers, every reachable relay accepts
+    // such a key as `x-api-key` and as `Authorization: Bearer` alike, which is
+    // what makes it importable. Only a rotating Claude Code OAuth token must
+    // stay on the dynamic connection, and that is recognisable from the token.
+    // `includes`, not `startsWith`: the native pi-ai adapter selects its auth
+    // scheme with `apiKey.includes('sk-ant-oat')`, and this classification must
+    // agree with that, or the dynamic and native paths would disagree about how
+    // to send the very same token.
+    const token = envValue(settings, 'ANTHROPIC_AUTH_TOKEN')
+    return { kind: token?.includes('sk-ant-oat') === true ? 'claude-token' : 'api-key' }
   }
   if (appType === 'codex') {
     const auth = objectValue(settings.auth)

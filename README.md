@@ -54,7 +54,7 @@ dsh web --host 127.0.0.1 --port 3080
 
 同一条线路如果已经在「设置 → 模型」里导入为原生供应商，就不会再以 `CC Switch ·` 分组重复出现——一份由 DSH 原生供应商提供，另一份不再列出，避免同一线路出现两组模型。
 
-## 在「设置 → 模型」中管理（0.4.7）
+## 在「设置 → 模型」中管理（0.4.8）
 
 除了模型选择器，插件还会在 DSH 的「设置 → 模型」页面底部加入一个「从 CC Switch 导入线路」面板。面板开头的一句话先说明关系：**不导入也能用**——所有线路本来就以 `CC Switch ·` 分组出现在模型选择器里；导入只是把某条线路固定成 DSH 原生供应商，方便改显示名、单独调参或手动增删模型。
 
@@ -77,7 +77,8 @@ dsh web --host 127.0.0.1 --port 3080
 
 以下情况继续使用原有的动态连接，不会被导入：
 
-- OAuth / 登录令牌类型（Codex ChatGPT 登录、Gemini OAuth）：短期令牌不复制。
+- 会轮换的 OAuth 登录令牌（Codex ChatGPT 登录、Gemini OAuth，以及真正以 `sk-ant-oat` 开头的 Claude Code 登录令牌）：复制过来下次刷新就失效，保留动态连接。
+  注意：CC Switch 的 Claude Code 表单把普通第三方中转 Key 也写进 `ANTHROPIC_AUTH_TOKEN`，字段名并不代表「登录令牌」。插件按令牌本身判断，这类静态中转 Key 属于可导入。
 - 当前 DSH 原生适配器不支持的协议（例如 Gemini 的 `google-generative-ai`）：仍作为动态路由出现在模型选择器中。
 - 目标凭据引用已被占用：跳过并提示，不会覆盖既有密钥。
 - DSH 配置为只读：只能读取，无法写入供应商。
@@ -174,10 +175,16 @@ dsh web --host 127.0.0.1 --port 3080
 
 ## 版本兼容
 
-`dsh-ccswitch` `0.4.7` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout`、`dsh-settings`、`dsh-credentials`、`dsh-typert-protocol`、`dsh-client-ui-slots`、`dsh-client-ui-settings-models` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
+`dsh-ccswitch` `0.4.8` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout`、`dsh-settings`、`dsh-credentials`、`dsh-typert-protocol`、`dsh-client-ui-slots`、`dsh-client-ui-settings-models` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
 
 - DSH `0.2.0-rc.2` 及后续 `0.2.x`：使用本版本。
 - DSH `0.1.x`（含 `0.1.0-rc.7`）：请继续使用 `dsh-ccswitch` `0.1.1`，本版本不向下兼容。
+
+`0.4.8` 修掉了「可导入 0」：
+
+- 分类器此前只看字段名：只要 Claude 线路写了 `ANTHROPIC_AUTH_TOKEN`，就一律当成会轮换的登录令牌而拒绝导入。但 CC Switch 的 Claude Code 表单正是把普通第三方中转 Key 写在这个字段里——结果是绝大多数 Claude 线路在面板上「可导入 0」。现在改为看令牌本身：只有 `sk-ant-oat` 开头的才是登录令牌，其余静态中转 Key 归为可导入。判定与原生 pi-ai 一致（它同样用 `apiKey.includes('sk-ant-oat')` 选认证方式）。
+- 动态连接的提示文案随之改为「OAuth 登录令牌会轮换⋯」，不再把中转 Key 也叫成 OAuth。
+- 新增 2 个回归测试：分类器对中转 Key / `sk-ant-oat` 令牌 / `ANTHROPIC_API_KEY` 三种写法给出正确结果；中转 Key 的线路必须出现在可导入列表里并且能真正导入。
 
 `0.4.7` 修掉了「面板出现了，但按钮全是灰的、点了也没反应」：
 
