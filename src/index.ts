@@ -1,5 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle } from '@deepseek-ai/dsh-llm'
+// Loads the `ctx.fs` augmentation without importing a value.
+import type {} from '@deepseek-ai/dsh-fs'
 import { CcSwitchAdapter } from './adapter.ts'
 import { resolveCredential } from './auth.ts'
 import { CcSwitchRepository } from './database.ts'
@@ -15,7 +18,15 @@ function describeError(error: unknown): string {
 
 export function apply(ctx: Context): void {
   const repository = new CcSwitchRepository()
-  const adapter = new CcSwitchAdapter(repository, () => ctx.get('attachments'))
+  const adapter = new CcSwitchAdapter(
+    repository,
+    () => ctx.get('attachments'),
+    (attachments, ref) => resolveImageAttachmentAccess(
+      attachments,
+      hostPath => ctx.get('fs')?.processPathFromHostPath(hostPath),
+      ref,
+    ),
+  )
   let registration: AdapterRegistrationHandle | undefined
   let registeredRoutes: readonly string[] = []
   let refreshing = false

@@ -1,20 +1,33 @@
 import { createModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
-import type { Api, Model, Models, MutableModels, SimpleStreamOptions, ThinkingLevel } from '@earendil-works/pi-ai'
+import type { Api, Model, Models, MutableModels, ModelThinkingLevel, SimpleStreamOptions } from '@earendil-works/pi-ai'
 import { attributionHeaders, contentHasImage, LlmAdapter, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
   GenerateOptions,
+  ImageAttachmentAccess,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
+  PreparedAdapterCall,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { resolveCredential } from './auth.ts'
 import { CcSwitchRepository } from './database.ts'
 import { toPiContext } from './context.ts'
 import { toStreamChunks } from './stream.ts'
 import { buildProvider } from './provider.ts'
 import type { CcSwitchModel, CcSwitchRoute, CcSwitchSnapshot } from './types.ts'
+
+/** Stop consuming a stream that has produced no event for this long. */
+const STREAM_IDLE_TIMEOUT_MS = 300_000
+
+/** Total inline base64 bytes one request may carry before images must be offloaded. */
+const MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
+
+/** Projection budget applied to one prepared request image. */
+const REQUEST_IMAGE_PIXEL_BUDGET = 2048 * 2048
+const REQUEST_IMAGE_MAX_BYTES = 1024 * 1024
 
 interface Snapshot {
   source: CcSwitchSnapshot
@@ -51,28 +64,38 @@ function modelInfo(model: Model<Api>): LlmModelInfo {
   }
 }
 
+/**
+ * The configured default this exact model can actually take, for DESCRIBING it.
+ * A level the model does not support yields none rather than throwing: the
+ * catalog feeds every picker, so one mis-set configuration field must not hide
+ * every model on the route. The request path still refuses.
+ */
+function describableReasoningLevel(model: Model<Api>, effort: string | undefined): ModelThinkingLevel | undefined {
+  if (effort === undefined) return undefined
+  return getSupportedThinkingLevels(model).some(level => level === effort) ? effort as ModelThinkingLevel : undefined
+}
+
 function reasoningInfo(
   model: Model<Api>,
-  defaultEffort: string | undefined,
+  defaultLevel: ModelThinkingLevel | undefined,
 ): Pick<LlmResolvedModelInfo, 'reasoning'> | Record<string, never> {
   if (!model.reasoning) return {}
   const levels = getSupportedThinkingLevels(model)
-  const hasDefault = defaultEffort !== undefined && levels.some(level => level === defaultEffort)
   return {
     reasoning: {
       efforts: levels.map(level => ({
         id: ReasoningEffortId(level),
         name: `${level.charAt(0).toUpperCase()}${level.slice(1)}`,
       })),
-      ...hasDefault ? { defaultEffort: ReasoningEffortId(defaultEffort) } : {},
+      ...defaultLevel === undefined ? {} : { defaultEffort: ReasoningEffortId(defaultLevel) },
     },
   }
 }
 
-function resolveReasoningLevel(model: Model<Api>, effort: string | undefined): ThinkingLevel | undefined {
+/** Validate an explicit effort without invoking pi-ai's clamp. */
+function resolveReasoningLevel(model: Model<Api>, effort: string | undefined): ModelThinkingLevel | undefined {
   if (effort === undefined) return undefined
-  const supported = getSupportedThinkingLevels(model)
-  if (supported.some(level => level === effort) && effort !== 'off') return effort as ThinkingLevel
+  if (getSupportedThinkingLevels(model).some(level => level === effort)) return effort as ModelThinkingLevel
   throw new LlmError(
     `CC Switch provider "${model.provider}" model "${model.id}" does not support reasoning effort "${effort}"`,
     'UNSUPPORTED_REASONING_EFFORT',
@@ -87,6 +110,7 @@ export class CcSwitchAdapter extends LlmAdapter {
   constructor(
     private readonly repository: CcSwitchRepository,
     private readonly resolveAttachments?: () => AttachmentStore | undefined,
+    private readonly resolveImageAccess?: (attachments: AttachmentStore, ref: ImageAttachmentRef) => ImageAttachmentAccess | undefined,
   ) {
     super()
   }
@@ -138,30 +162,57 @@ export class CcSwitchAdapter extends LlmAdapter {
     return model
   }
 
+  private modelInfo(snapshot: Snapshot, provider: string, modelId: string): LlmResolvedModelInfo {
+    const model = this.model(snapshot, provider, modelId)
+    const defaultLevel = describableReasoningLevel(model, this.repository.config.codexReasoningEffort)
+    return {
+      ...modelInfo(model),
+      context: { contextWindow: model.contextWindow },
+      ...reasoningInfo(model, defaultLevel),
+    }
+  }
+
   override providerInfo(provider: string): LlmProviderInfo {
     return { id: provider, name: this.current().routes.get(provider)?.name ?? provider }
   }
 
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    const snapshot = this.current()
-    this.route(snapshot, provider)
-    return Promise.resolve(snapshot.models.getModels(provider).map(modelInfo))
-  }
-
-  override resolveModel(provider: string, modelId: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
-    const model = this.model(this.current(), provider, modelId)
-    return Promise.resolve({
-      ...modelInfo(model),
-      context: { contextWindow: model.contextWindow },
-      ...reasoningInfo(model, this.repository.config.codexReasoningEffort),
+    // Resolve asynchronously: a catalog miss must reject the returned promise,
+    // never throw during argument evaluation at the call site.
+    return Promise.resolve().then(() => {
+      const snapshot = this.current()
+      this.route(snapshot, provider)
+      return snapshot.models.getModels(provider).map(modelInfo)
     })
   }
 
-  override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+  override resolveModel(provider: string, modelId: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve().then(() => this.modelInfo(this.current(), provider, modelId))
+  }
+
+  /**
+   * Capture the whole snapshot before the first await so a configuration change
+   * reaches the next step, never the one in flight: `Models.streamSimple()` is
+   * lazy, so it would otherwise resolve its provider after the credential await.
+   */
+  override prepareCall(provider: string, modelId: string, _signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    return Promise.resolve().then(() => {
+      const snapshot = this.current()
+      return {
+        model: this.modelInfo(snapshot, provider, modelId),
+        stream: (options: GenerateOptions) => this.streamWithSnapshot(options, snapshot),
+      }
+    })
+  }
+
+  override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    return this.streamWithSnapshot(options, this.current())
+  }
+
+  private async *streamWithSnapshot(options: GenerateOptions, snapshot: Snapshot): AsyncIterable<StreamChunk> {
     if (options.stop !== undefined) {
       throw new LlmError('dsh-ccswitch does not support GenerateOptions.stop', 'UNSUPPORTED_OPTION')
     }
-    const snapshot = this.current()
     const route = this.route(snapshot, options.provider)
     const model = this.model(snapshot, options.provider, options.model)
     const reasoning = resolveReasoningLevel(
@@ -169,28 +220,82 @@ export class CcSwitchAdapter extends LlmAdapter {
       options.reasoningEffort ?? (model.reasoning ? this.repository.config.codexReasoningEffort : undefined),
     )
     const credential = await resolveCredential(route, this.repository)
-    const containsImage = options.messages.some(message => contentHasImage(message.content))
-    if (containsImage && !model.input.includes('image')) {
-      throw new LlmError(`CC Switch model "${model.id}" does not support image input`, 'UNSUPPORTED_CONTENT')
+    const consumer = new AbortController()
+    const upstream = options.signal === undefined ? consumer.signal : AbortSignal.any([options.signal, consumer.signal])
+    const watchdog = idleWatchdog(upstream, STREAM_IDLE_TIMEOUT_MS, 'LLM_STREAM_IDLE_TIMEOUT')
+    try {
+      const containsImage = options.messages.some(message => contentHasImage(message.content))
+      if (containsImage && !model.input.includes('image')) {
+        throw new LlmError(`CC Switch model "${model.id}" does not support image input`, 'UNSUPPORTED_CONTENT')
+      }
+      const attachments = containsImage ? this.resolveAttachments?.() : undefined
+      if (containsImage && attachments === undefined) {
+        throw new LlmError('CC Switch image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
+      }
+      const context = attachments === undefined
+        ? toPiContext(options, undefined)
+        : await toPiContext({ ...options, signal: watchdog.signal }, {
+          attachments,
+          // Give the model a read-only path to the normalized image when the
+          // filesystem service can map it into this execution world.
+          ...this.resolveImageAccess === undefined
+            ? {}
+            : { resolveImageAccess: (ref: ImageAttachmentRef) => this.resolveImageAccess?.(attachments, ref) },
+          maxRequestImageBytes: MAX_REQUEST_IMAGE_BYTES,
+          requestImagePolicy: {
+            maxPixels: REQUEST_IMAGE_PIXEL_BUDGET,
+            maxBytes: REQUEST_IMAGE_MAX_BYTES,
+          },
+        })
+      const streamOptions: SimpleStreamOptions = {
+        apiKey: credential.token,
+        headers: requestHeaders(route, credential.token ?? '', credential.headers),
+        signal: watchdog.signal,
+        ...options.temperature === undefined ? {} : { temperature: options.temperature },
+        ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
+        ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
+        ...reasoning === undefined || reasoning === 'off' ? {} : { reasoning },
+        maxRetries: 0,
+      }
+      const iterator = toStreamChunks(
+        snapshot.models.streamSimple(model, context, streamOptions),
+        model.contextWindow,
+        options.signal,
+        model.id,
+      )[Symbol.asyncIterator]()
+      let exhausted = false
+      try {
+        for (;;) {
+          const result = await watchdog.next(iterator)
+          const timeout = timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT')
+          if (timeout !== undefined) throw timeout
+          if (result.done) {
+            exhausted = true
+            return
+          }
+          yield result.value
+        }
+      } finally {
+        if (!exhausted) {
+          consumer.abort('pi-ai stream consumer stopped')
+          try {
+            await iterator.return(undefined)
+          } catch {
+            // The provider teardown after an abort is best-effort.
+          }
+        }
+      }
+    } catch (error) {
+      if (timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT') !== undefined) {
+        throw new LlmError(`pi-ai stream idle timeout after ${STREAM_IDLE_TIMEOUT_MS}ms`, 'TIMEOUT', { cause: error })
+      }
+      if (options.signal?.aborted) {
+        throw new LlmError('pi-ai request aborted by caller', 'ABORTED', { cause: error })
+      }
+      throw error
+    } finally {
+      consumer.abort('pi-ai stream consumer stopped')
+      watchdog[Symbol.dispose]()
     }
-    const attachments = containsImage ? this.resolveAttachments?.() : undefined
-    if (containsImage && attachments === undefined) {
-      throw new LlmError('CC Switch image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
-    }
-    const context = attachments === undefined
-      ? toPiContext(options, undefined)
-      : await toPiContext(options, attachments)
-    const streamOptions: SimpleStreamOptions = {
-      apiKey: credential.token,
-      headers: requestHeaders(route, credential.token ?? '', credential.headers),
-      signal: options.signal,
-      ...options.temperature === undefined ? {} : { temperature: options.temperature },
-      ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
-      ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
-      ...reasoning === undefined ? {} : { reasoning },
-      maxRetries: 0,
-    }
-    const events = snapshot.models.streamSimple(model, context, streamOptions)
-    yield* toStreamChunks(events, model.contextWindow)
   }
 }

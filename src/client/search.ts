@@ -74,11 +74,25 @@ function visibleModels(groups: HTMLElement): HTMLButtonElement[] {
 }
 
 function findModelGroups(menu: HTMLElement): HTMLElement | null {
+  // DSH 0.2.0-rc.2 makes the model viewport itself the `role="menu"` scroll
+  // container, with the group sections as its direct children. Older releases
+  // nested the sections one level deeper, under a dedicated container.
+  if (directGroups(menu).some(group => group.querySelector(MODEL_ITEM_SELECTOR) !== null)) return menu
   const group = Array.from(menu.querySelectorAll<HTMLElement>(MODEL_GROUP_SELECTOR))
     .find(candidate => candidate.querySelector(MODEL_ITEM_SELECTOR) !== null)
   if (group === undefined) return null
   const container = group.parentElement
   return container !== null && container !== menu && menu.contains(container) ? container : null
+}
+
+/**
+ * DSH 0.2.0-rc.2 renders its own model search (a `role="searchbox"` input in the
+ * pane's search row) whenever a provider lists more than four models. Injecting
+ * a second box would leave two filters fighting over the same `hidden` flags.
+ */
+function hasNativeSearch(menu: HTMLElement): boolean {
+  const surface = menu.parentElement
+  return surface !== null && surface.querySelector('input[role="searchbox"]') !== null
 }
 
 /** Add a search input to one currently rendered model pane. */
@@ -161,7 +175,9 @@ export function installModelSearch(root: Document = document): () => void {
 
   const sync = (): void => {
     for (const [menu, controller] of controllers) {
-      const groups = menu.isConnected ? findModelGroups(menu) : null
+      // Drop the controller when the pane goes away or grows its own search
+      // box: two filters over the same `hidden` flags would fight.
+      const groups = menu.isConnected && !hasNativeSearch(menu) ? findModelGroups(menu) : null
       if (groups === controller.groups) {
         controller.refresh()
         continue
@@ -173,7 +189,7 @@ export function installModelSearch(root: Document = document): () => void {
     for (const menu of root.querySelectorAll<HTMLElement>('[role="menu"]')) {
       if (controllers.has(menu)) continue
       const groups = findModelGroups(menu)
-      if (groups !== null) controllers.set(menu, enhanceModelMenu(menu, groups))
+      if (groups !== null && !hasNativeSearch(menu)) controllers.set(menu, enhanceModelMenu(menu, groups))
     }
   }
 

@@ -1,11 +1,15 @@
 import {
   calculateCost,
   createAssistantMessageEventStream,
-  type Context,
+  getCurrentTools,
+  getInitialSystemMessage,
+  getSystemMessageText,
+  type JsonObject,
   type Model,
   type ProviderStreams,
   type SimpleStreamOptions,
   type StreamOptions,
+  type TranscriptContext,
 } from '@earendil-works/pi-ai'
 import type { AssistantMessage, AssistantMessageEventStream, StopReason, Usage } from '@earendil-works/pi-ai'
 import {
@@ -44,7 +48,7 @@ interface GeminiPart {
   readonly functionCall?: {
     readonly id?: string
     readonly name?: string
-    readonly args?: Record<string, unknown>
+    readonly args?: JsonObject
   }
 }
 
@@ -80,21 +84,27 @@ function headers(options: StreamOptions): Record<string, string> {
   return result
 }
 
-function payload(model: GeminiModel, context: Context, options: StreamOptions): GeminiPayload {
-  const mode = context.tools === undefined || context.tools.length === 0
+function payload(model: GeminiModel, context: TranscriptContext, options: StreamOptions): GeminiPayload {
+  // pi-ai 0.87.1 normalizes the caller's Context into a TranscriptContext whose
+  // prompt and tool declarations live in the leading system message, so both
+  // are read back from the transcript rather than from Context fields.
+  const tools = getCurrentTools(context.messages)
+  const initialSystemMessage = getInitialSystemMessage(context.messages)
+  const systemInstruction = initialSystemMessage === undefined ? '' : getSystemMessageText(initialSystemMessage)
+  const mode = tools.length === 0
     ? undefined
     : resolveGoogleFunctionCallingMode(
-      context.tools,
+      tools,
       (options as SimpleStreamOptions & { toolChoice?: string }).toolChoice,
       supportsGoogleStrictToolSampling(model.id),
     )
   const config: GeminiPayload = {
     contents: convertMessages(model, context),
-    ...(context.systemPrompt === undefined ? {} : {
-      systemInstruction: { role: 'user', parts: [{ text: context.systemPrompt }] },
+    ...(systemInstruction.length === 0 ? {} : {
+      systemInstruction: { role: 'user', parts: [{ text: systemInstruction }] },
     }),
-    ...(context.tools === undefined || context.tools.length === 0 ? {} : {
-      tools: convertTools(context.tools),
+    ...(tools.length === 0 ? {} : {
+      tools: convertTools(tools),
       ...(mode === undefined ? {} : { toolConfig: { functionCallingConfig: { mode } } }),
     }),
     ...(options.temperature === undefined && options.maxTokens === undefined ? {} : {
@@ -189,12 +199,14 @@ function createOutput(model: GeminiModel): AssistantMessage {
       input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-    stopReason: 'stop' as StopReason,
+    // `pending` marks "no finish reason seen yet"; a stream that ends without
+    // one is reported as an error rather than as a clean stop.
+    stopReason: 'pending' as StopReason,
     timestamp: Date.now(),
   }
 }
 
-function streamOAuth(model: GeminiModel, context: Context, options: StreamOptions): AssistantMessageEventStream {
+function streamOAuth(model: GeminiModel, context: TranscriptContext, options: StreamOptions): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream()
   void (async () => {
     const output = createOutput(model)
@@ -255,6 +267,7 @@ function streamOAuth(model: GeminiModel, context: Context, options: StreamOption
       if (current.value?.type === 'text') stream.push({ type: 'text_end', contentIndex: output.content.length - 1, content: current.value.text, partial: output })
       if (current.value?.type === 'thinking') stream.push({ type: 'thinking_end', contentIndex: output.content.length - 1, content: current.value.thinking, partial: output })
       if (options.signal?.aborted) throw new Error('Request was aborted')
+      if (output.stopReason === 'pending') throw new Error('Gemini OAuth stream ended without a finish reason')
       if (output.stopReason === 'error' || output.stopReason === 'aborted') throw new Error('Gemini OAuth response was not successful')
       stream.push({ type: 'done', reason: output.stopReason, message: output })
       stream.end()
