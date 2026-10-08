@@ -310,4 +310,12 @@
 - **Tested**：真实 Cordis/LlmRuntime + 临时 SQLite 集成覆盖 81 条合成路由、restart/dispose、数据库后到、同 route 模型/名字变化通知、无变化不重复通知和空目录恢复。不包含真实凭证、不发 HTTP。聚焦 19/19，全仓 73/73，typecheck/build 通过。
 - **Installation**：当前 Electron 独占管理 `desktop` profile，CLI 拒绝 `--profile desktop` 安装；README 改为桌面「插件 → 添加插件」安装 GitHub 来源，旧版先卸载再安装。命令行 Web 版继续使用 `--profile web`。
 - **Runtime evidence**：经用户授权，在真实 desktop 加载 0.2.1 后，session model catalog 返回 CC Switch 分组且无 provider 错误；GUI 皮肤的「更多模型」能打开完整目录，但原名称缺少来源标识。
-- **Upgrade cache**：已通过真实桌面插件页从 GitHub 安装并启用 0.2.2，lockfile 指向发布提交，安装构建除 Git 的 CRLF/LF 换行转换外与仓库一致。运行宿主仍使用旧 module。实际发行版 Plugin Manager 明确将更新标记为 `restart-required`，卸载并重装也不清除 Node 模块缓存；须完整重启桌面应用，不是仅刷新页面。用户随后授权重新安装并重启，重启后 GUI 前缀验收仍待完成。
+- **Upgrade cache**：已通过真实桌面插件页从 GitHub 安装并启用 0.2.2，lockfile 指向发布提交，安装构建除 Git 的 CRLF/LF 换行转换外与仓库一致。运行宿主仍使用旧 module。实际发行版 Plugin Manager 明确将更新标记为 `restart-required`，卸载并重装也不清除 Node 模块缓存；须完整重启桌面应用，不是仅刷新页面。用户随后授权重新安装并重启；重启后的 GUI 前缀验收已在 S14 完成。
+
+## S14 重启后真实 GUI 验收与收口（2026-10-08）
+
+- **Observed**：重新核对官方 npm dist-tags：latest/next 均为 `0.2.0-rc.2`；`0.2.1-alpha.1` 是 alpha，不作为默认兼容目标。当前 desktop 安装包版本为 `0.2.2`。
+- **Modified**：仅补充验收文档；移除 desktop profile 中本任务添加的临时只读诊断 patch，删除本地临时授权 URL 和含授权 URL 的验收脚本，不改默认模型。
+- **Tested**：恢复后独立复跑 `pnpm test`（73 pass / 0 fail）、`pnpm typecheck`、`pnpm build`，全部 EXIT=0。
+- **Verified**：重启后真实宿主快照为 82 个 CC Switch 分组、475 个模型、0 个 catalog 错误，82 个分组均带 `CC Switch ·` 前缀。通过 Tabbit 在实际 `http://127.0.0.1:19387/` 打开模型菜单 →「更多模型」，断言首个前缀可见，DOM 中计数为 82 个 CC Switch 分组标签。真实插件页 `启用 dsh-ccswitch` switch 为 `aria-checked=true`。安装目录中的四个 lib 产物经 CRLF/LF 归一化后全部与本次构建相同。
+- **Not verified**：本次验收针对安装、启用和模型目录可见性，没有发送模型生成请求；不把目录验收等同于所有 provider 的网络凭据、工具调用或图片请求均可用。当前模型不支持工具图像输入，截图仅已捕获，界面可见性证据来自浏览器 locator/DOM 断言而非图片视觉审核。
