@@ -38,7 +38,7 @@ dsh web --host 127.0.0.1 --port 3080
 
 ### 安装后
 
-重新打开模型选择器；仍显示旧目录时刷新页面，必要时重启 DSH。应当看到名称以 `CC Switch · Claude ·`、`CC Switch · Codex ·` 或 `CC Switch · Gemini ·` 开头的分组，而不是一个统一叫「CC Switch provider」的分组。
+安装并启用后，**完整退出并重新启动 DSH 桌面应用**，尤其是升级旧版时；仅刷新浏览器页面不会清除宿主缓存中的旧插件代码。Web 版则停止并重新启动 `dsh web`。然后打开模型选择器，应当看到名称以 `CC Switch · Claude ·`、`CC Switch · Codex ·` 或 `CC Switch · Gemini ·` 开头的分组，而不是一个统一叫「CC Switch provider」的分组。
 
 ## 选择模型
 

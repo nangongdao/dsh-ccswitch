@@ -309,4 +309,5 @@
 - **Modified**：配置变化时 `syncRegistration(changed)`，发现模型真正变化时 `syncRegistration(true)`；setter 比较 id、name、contextWindow、maxTokens 并返回是否变化。每个分组显示 `CC Switch · 应用 · 原名称`，不改变 provider ID 或原筛选名称。
 - **Tested**：真实 Cordis/LlmRuntime + 临时 SQLite 集成覆盖 81 条合成路由、restart/dispose、数据库后到、同 route 模型/名字变化通知、无变化不重复通知和空目录恢复。不包含真实凭证、不发 HTTP。聚焦 19/19，全仓 73/73，typecheck/build 通过。
 - **Installation**：当前 Electron 独占管理 `desktop` profile，CLI 拒绝 `--profile desktop` 安装；README 改为桌面「插件 → 添加插件」安装 GitHub 来源，旧版先卸载再安装。命令行 Web 版继续使用 `--profile web`。
-- **Runtime evidence**：经用户授权，在真实 desktop 加载 0.2.1 后，session model catalog 返回 CC Switch 分组且无 provider 错误；GUI 皮肤的「更多模型」能打开完整目录，但原名称缺少来源标识。0.2.2 的仓库安装与 GUI 前缀验收待发布后单独记录。
+- **Runtime evidence**：经用户授权，在真实 desktop 加载 0.2.1 后，session model catalog 返回 CC Switch 分组且无 provider 错误；GUI 皮肤的「更多模型」能打开完整目录，但原名称缺少来源标识。
+- **Upgrade cache**：已通过真实桌面插件页从 GitHub 安装并启用 0.2.2，lockfile 指向发布提交，安装构建除 Git 的 CRLF/LF 换行转换外与仓库一致。运行宿主仍使用旧 module。实际发行版 Plugin Manager 明确将更新标记为 `restart-required`，卸载并重装也不清除 Node 模块缓存；须完整重启桌面应用，不是仅刷新页面。用户随后授权重新安装并重启，重启后 GUI 前缀验收仍待完成。
