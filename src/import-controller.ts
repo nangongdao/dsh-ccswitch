@@ -20,6 +20,9 @@ export class CcSwitchImportController extends TypertRemoteService {
   resync(providers: unknown, signal: AbortSignal): Promise<ImportOutcome[]> {
     return this.importer.resync(providers, signal)
   }
+  refreshKey(providers: unknown, signal: AbortSignal): Promise<ImportOutcome[]> {
+    return this.importer.refreshKey(providers, signal)
+  }
   remove(providers: unknown, signal: AbortSignal): Promise<ImportOutcome[]> {
     return this.importer.remove(providers, signal)
   }
@@ -27,7 +30,7 @@ export class CcSwitchImportController extends TypertRemoteService {
 
 // Invoke the public standard decorator API explicitly, keeping source-mode
 // tests usable with Node's type stripping (which cannot parse decorators).
-for (const name of ['list', 'refresh', 'importProviders', 'resync', 'remove'] as const) {
+for (const name of ['list', 'refresh', 'importProviders', 'resync', 'refreshKey', 'remove'] as const) {
   Remote<CcSwitchImportController, never[], unknown>(CcSwitchImportController.prototype[name], {
     kind: 'method', name, static: false, private: false,
     access: {

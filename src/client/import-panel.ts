@@ -14,11 +14,11 @@ const DISCOVERY: Record<ImportRow['discovery'], string> = {
 /** One request per chunk keeps a long import responsive and gives real progress. */
 const CHUNK = 5
 const MAX_SELECTION = 128
-type Phase = '' | 'reload' | 'refresh' | 'import' | 'update' | 'remove'
+type Phase = '' | 'reload' | 'refresh' | 'import' | 'update' | 'key' | 'remove'
 interface Feedback { key: string; tone: 'success' | 'warn' | 'error'; text: string }
 
 const toneOf = (status: ImportOutcome['status']): Feedback['tone'] =>
-  status === 'imported' ? 'success' : status === 'skipped' ? 'warn' : 'error'
+  status === 'skipped' ? 'warn' : status === 'failed' ? 'error' : 'success'
 
 export function ImportPanel({ remote }: ImportPanelProps) {
   const [view, setView] = useState<ImportView>()
@@ -90,11 +90,13 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     const failed = new Set(outcomes.filter(outcome => outcome.status === 'failed').map(outcome => outcome.provider))
     setSelected(current => current.filter(id => failed.has(id)))
   })
-  const runOne = (provider: string, kind: 'update' | 'remove') => guard(kind, async () => {
+  const runOne = (provider: string, kind: 'update' | 'key' | 'remove') => guard(kind, async () => {
     const rows = view?.rows ?? []
     setFeedback([])
     setConfirming('')
-    const answer = kind === 'update' ? await remote.resync([provider]) : await remote.remove([provider])
+    const answer = kind === 'update' ? await remote.resync([provider])
+      : kind === 'key' ? await remote.refreshKey([provider])
+      : await remote.remove([provider])
     if (!answer.ok) throw new Error(answer.error.message)
     const fresh = await reload()
     report(answer.value, fresh.rows)
@@ -131,6 +133,8 @@ export function ImportPanel({ remote }: ImportPanelProps) {
       onClick,
     }, label)
   const tag = (text: string, key?: string) => h('span', { key, className: 'dsh-ccswitch-import-tag' }, text)
+  /** A destructive action asks once: the row shows what it will do, then confirms. */
+  const armed = (kind: 'key' | 'remove', provider: string) => confirming === `${kind}:${provider}`
   const status = (text: string, tone: 'muted' | 'warn' | 'error' = 'muted') =>
     h('p', { className: `dsh-ccswitch-import-status is-${tone}` }, text)
   /** Why this route is not importable, plus what the interface did last time. */
@@ -169,22 +173,27 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     tag(`${entry.models} 个模型`, 'models'),
     h('span', { className: 'dsh-ccswitch-import-row-actions', key: 'actions' },
       button(phase === 'update' ? '更新中…' : '更新模型', () => void runOne(entry.provider, 'update')),
-      confirming === entry.provider
+      armed('key', entry.provider)
+        ? button('确认换密钥', () => void runOne(entry.provider, 'key'), { link: true })
+        : button('更新密钥', () => setConfirming(`key:${entry.provider}`), { link: true }),
+      armed('remove', entry.provider)
         ? button('确认移除', () => void runOne(entry.provider, 'remove'), { danger: true })
-        : button('移除', () => setConfirming(entry.provider), { danger: true }),
+        : button('移除', () => setConfirming(`remove:${entry.provider}`), { danger: true }),
     ),
   ], [
     sample(entry),
     h('p', { className: 'dsh-ccswitch-import-status', key: 'state' },
       h('span', { className: `dsh-ccswitch-import-dot${entry.credential === 'missing' ? ' is-missing' : ''}` }),
       entry.credential === 'missing'
-        ? '已导入，但密钥条目不见了；移除后重新导入可恢复。'
+        ? '已导入，但密钥条目不见了；移除后重新导入可恢复，或点「更新密钥」写回 CC Switch 里的当前密钥。'
         : entry.models === 0
           ? '已导入，但这个供应商当前没有任何模型；可以在上方卡片里添加模型 ID。'
           : '已导入：模型里只保留这一份，CC Switch 的改动不会覆盖它。'),
-    status(confirming === entry.provider
+    status(armed('remove', entry.provider)
       ? '移除会删除这个 DSH 原生供应商，并同时删除该线路写入的密钥条目。'
-      : '“更新模型”会重新读取接口模型列表，保留你手动添加的模型与现有密钥。'),
+      : armed('key', entry.provider)
+        ? '会用 CC Switch 里这条线路当前的 API Key 覆盖 DSH 里保存的那一份；模型与其他设置不动。'
+        : '“更新模型”重新读取接口模型列表，保留你手动添加的模型与现有密钥；“更新密钥”在 CC Switch 里换过密钥后使用。'),
   ])
 
   return h('section', { className: 'dsh-ccswitch-import', 'aria-label': 'CC Switch 线路导入' },

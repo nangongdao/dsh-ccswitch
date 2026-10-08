@@ -24,6 +24,8 @@ function fixture(overrides = {}) {
   const routes = overrides.routes ?? [route()]
   let credentialReads = 0
   let refreshes = 0
+  let describeActive = 0
+  let describePeak = 0
   const native = () => ({ ns: 'llm-pi-ai', revision, schema: pi.Config.toJSON(), value: { providers }, applies: 'live', autoGenerate: false })
   const deps = {
     settings: { writable: true, describe: () => [native()], mutate: async (ns, batch, expected) => {
@@ -45,8 +47,20 @@ function fixture(overrides = {}) {
       revision++
     } },
     credentials: {
-      describe: async ref => ({ configured: keys.has(ref), writable: true }),
-      set: async (ref, value) => { assert.ok(!keys.has(ref)); keys.set(ref, value) },
+      describe: async ref => {
+        describeActive += 1
+        describePeak = Math.max(describePeak, describeActive)
+        try {
+          if (overrides.describeDelay) await new Promise(resolve => setTimeout(resolve, overrides.describeDelay))
+          return { configured: keys.has(ref), writable: true }
+        } finally { describeActive -= 1 }
+      },
+      set: async (ref, value) => {
+        // Importing must never overwrite an occupied reference; replacing a key
+        // on an already imported provider legitimately writes over its own.
+        assert.ok(!keys.has(ref) || overrides.allowOverwrite === true)
+        keys.set(ref, value)
+      },
       resolve: async ref => keys.has(ref) ? { value: keys.get(ref), source: 'synthetic-store' } : undefined,
       unset: async ref => { keys.delete(ref) },
     },
@@ -58,7 +72,7 @@ function fixture(overrides = {}) {
   }
   const importer = new CcSwitchImporter(deps)
   return { importer, deps, providers, keys, ops, routes, native,
-    credentialReads: () => credentialReads, refreshes: () => refreshes }
+    credentialReads: () => credentialReads, refreshes: () => refreshes, describePeak: () => describePeak }
 }
 const signal = () => new AbortController().signal
 
@@ -228,6 +242,27 @@ test('a failed interface read never retires the models this plugin wrote', async
   assert.deepEqual(f.providers[target].models.map(entry => entry.id), ['new-model'])
 })
 
+test('imported key lookups run in bounded batches and keep the row order', async () => {
+  const sources = Array.from({ length: 20 }, (_, index) => route({
+    provider: `ccswitch/codex/source-${index}`, sourceId: `source-${index}`, name: `Source ${index}`,
+  }))
+  const f = fixture({ routes: sources, describeDelay: 5 })
+  for (const source of sources) {
+    f.providers[importedProviderId(source)] = {
+      displayName: 'CC Switch · Codex · imported', api: 'openai-responses',
+      baseURL: 'https://example.invalid/v1', models: [{ ...model }], apiKeyEnv: keyRefOf(source),
+    }
+  }
+  f.keys.set(keyRefOf(sources[0]), 'synthetic-key')
+  const view = await f.importer.list()
+  assert.equal(view.rows.length, 20)
+  assert.deepEqual(view.rows.map(row => row.provider), sources.map(source => source.provider))
+  assert.equal(view.rows[0].credential, 'configured')
+  assert.equal(view.rows[1].credential, 'missing')
+  assert.ok(f.describePeak() > 1, 'a serial loop would never overlap')
+  assert.ok(f.describePeak() <= 8, `bounded concurrency, saw ${f.describePeak()}`)
+})
+
 test('updating or removing something that was never imported is a skipped no-op', async () => {
   const f = fixture()
   const other = 'ccswitch/claude/other'
@@ -275,6 +310,55 @@ test('removing an import keeps a key that the user repointed the provider at', a
   assert.equal(f.keys.has(mine), false, 'the reference this plugin wrote is still cleaned up')
 })
 
+test('replacing a key writes the current CC Switch token over the stored one', async () => {
+  const f = fixture({ allowOverwrite: true })
+  await f.importer.importProviders([f.routes[0].provider], signal())
+  const target = importedProviderId(f.routes[0])
+  const ref = f.providers[target].apiKeyEnv
+  assert.equal(f.keys.get(ref), 'synthetic-key-never-output')
+  // CC Switch rotated the key: the next credential read returns the new value.
+  f.deps.credential = async () => ({ token: 'rotated-key-never-output' })
+
+  const outcomes = await f.importer.refreshKey([f.routes[0].provider], signal())
+
+  assert.equal(outcomes[0].status, 'updated')
+  assert.match(outcomes[0].message, /覆盖该供应商的密钥条目/)
+  assert.equal(f.keys.get(ref), 'rotated-key-never-output')
+  assert.equal(JSON.stringify(outcomes).includes('rotated-key'), false, 'a key is never echoed back')
+  assert.deepEqual(f.providers[target].models.map(entry => entry.id), [model.id], 'the catalog is untouched')
+  assert.equal(f.ops.length, 1, 'replacing a key writes no settings')
+})
+
+test('replacing a key refuses every case where the plugin does not own it', async () => {
+  const f = fixture({ allowOverwrite: true })
+  await f.importer.importProviders([f.routes[0].provider], signal())
+  const target = importedProviderId(f.routes[0])
+  const mine = f.providers[target].apiKeyEnv
+  f.providers[target] = { ...f.providers[target], apiKeyEnv: 'MY_OWN_KEY' }
+  f.keys.set('MY_OWN_KEY', 'user-owned-secret')
+  const repointed = await f.importer.refreshKey([f.routes[0].provider], signal())
+  assert.equal(repointed[0].status, 'skipped')
+  assert.match(repointed[0].message, /MY_OWN_KEY/)
+  assert.equal(f.keys.get('MY_OWN_KEY'), 'user-owned-secret')
+
+  f.providers[target] = { ...f.providers[target], apiKeyEnv: mine }
+  f.deps.credentials.describe = async () => ({ configured: true, writable: false })
+  const readonly = await f.importer.refreshKey([f.routes[0].provider], signal())
+  assert.equal(readonly[0].status, 'skipped')
+  assert.match(readonly[0].message, /只读来源/)
+
+  f.deps.credentials.describe = async () => ({ configured: true, writable: true })
+  f.deps.credential = async () => { throw new Error('synthetic-secret-must-not-leak') }
+  const unreadable = await f.importer.refreshKey([f.routes[0].provider], signal())
+  assert.equal(unreadable[0].status, 'skipped')
+  assert.match(unreadable[0].message, /没有读到可用的 API Key/)
+  assert.equal(JSON.stringify(unreadable).includes('synthetic-secret'), false)
+
+  const other = 'ccswitch/claude/other'
+  f.routes.push(route({ provider: other, appType: 'claude', name: 'Other', protocol: 'anthropic-messages' }))
+  assert.match((await f.importer.refreshKey([other], signal()))[0].message, /尚未导入/)
+})
+
 test('a second write operation is rejected while one is running', async () => {
   let open
   const blocked = new Promise(resolve => { open = resolve })
@@ -282,6 +366,7 @@ test('a second write operation is rejected while one is running', async () => {
   const first = f.importer.importProviders([f.routes[0].provider], signal())
   await assert.rejects(f.importer.remove([f.routes[0].provider], signal()), /正在进行/)
   await assert.rejects(f.importer.resync([f.routes[0].provider], signal()), /正在进行/)
+  await assert.rejects(f.importer.refreshKey([f.routes[0].provider], signal()), /正在进行/)
   open()
   assert.equal((await first)[0].status, 'imported')
 })

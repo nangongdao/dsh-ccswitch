@@ -150,10 +150,16 @@ export class CcSwitchImporter {
   }
   async list(): Promise<ImportView> {
     const { available, writable, items } = this.inspections()
-    const rows: ImportRow[] = []
-    for (const { row } of items) {
-      if (row.imported) row.credential = await this.credentialState(row.targetProvider)
-      rows.push(row)
+    const rows: ImportRow[] = items.map(item => item.row)
+    // Only imported rows have a key to look up, and each lookup may touch the
+    // credential store. Doing that one row at a time would make a large,
+    // mostly-imported panel open visibly slowly, so resolve them in small
+    // batches while keeping the row order intact.
+    const imported = rows.filter(row => row.imported)
+    for (let offset = 0; offset < imported.length; offset += 8) {
+      await Promise.all(imported.slice(offset, offset + 8).map(async row => {
+        row.credential = await this.credentialState(row.targetProvider)
+      }))
     }
     return { available, writable, rows }
   }
@@ -364,6 +370,66 @@ export class CcSwitchImporter {
       }
     } catch {
       return { provider: id, status: 'failed', message: '更新未完成；现有配置仍可用，请稍后重试。' }
+    }
+  }
+  /**
+   * Replace the stored key with the one CC Switch holds for the route right now.
+   * CC Switch is a key manager first, so rotating a key there and leaving the
+   * imported provider on the old one is a silent trap: every request fails with
+   * an auth error and nothing on this page explains why. This is the fix, and it
+   * always reports what it replaced.
+   */
+  async refreshKey(providers: unknown, signal: AbortSignal): Promise<ImportOutcome[]> {
+    const ids = this.validate(providers)
+    if (this.busy) throw new Error(BUSY)
+    this.busy = true
+    try {
+      const outcomes: ImportOutcome[] = []
+      for (const id of ids) {
+        signal.throwIfAborted()
+        outcomes.push(await this.refreshKeyOne(id, signal))
+      }
+      return outcomes
+    } finally { this.busy = false }
+  }
+  private async refreshKeyOne(id: string, signal: AbortSignal): Promise<ImportOutcome> {
+    const route = this.route(id)
+    if (route === undefined) return { provider: id, status: 'skipped', message: '供应商已移除，请重新读取。' }
+    const native = this.native()
+    if (native === undefined || !this.deps.settings.writable) return { provider: id, status: 'skipped', message: '当前 DSH 无法写入原生供应商。' }
+    const target = importedProviderId(route)
+    if (!own(profiles(native), target)) return { provider: id, status: 'skipped', message: '尚未导入；请先导入该线路。' }
+    const ref = keyRefFor(target)
+    const apiKeyEnv = record(profiles(native)[target]).apiKeyEnv
+    // Only the reference this plugin derives is ever written: if the provider was
+    // repointed at the user's own key entry, that entry is theirs to keep.
+    if (typeof apiKeyEnv === 'string' && apiKeyEnv !== String(ref)) {
+      return { provider: id, status: 'skipped', message: `该供应商引用的是 ${apiKeyEnv}，那不是本插件写入的密钥条目，未做改动。` }
+    }
+    let state: { configured: boolean; writable: boolean }
+    try { state = await this.deps.credentials.describe(ref) } catch {
+      return { provider: id, status: 'failed', message: '无法读取 DSH 凭据存储，密钥未更新。' }
+    }
+    if (!state.writable) return { provider: id, status: 'skipped', message: '该密钥条目由只读来源提供，未做改动。' }
+    let token: string | undefined
+    try { token = (await this.deps.credential(route)).token } catch { token = undefined }
+    if (token === undefined || !/^[\x21-\x7E]+$/.test(token)) {
+      return { provider: id, status: 'skipped', message: '没有读到可用的 API Key，请在 CC Switch 中确认该线路凭据。' }
+    }
+    try {
+      signal.throwIfAborted()
+      const current = this.route(id)
+      if (current?.fingerprint !== route.fingerprint) return { provider: id, status: 'skipped', message: '线路在更新过程中发生变化，请重新读取后再试。' }
+      await this.deps.credentials.set(ref, token)
+      this.deps.changed()
+      return {
+        provider: id, status: 'updated',
+        message: state.configured
+          ? '已用 CC Switch 里的当前 API Key 覆盖该供应商的密钥条目；模型与其他设置未改动。'
+          : '已写入 CC Switch 里的当前 API Key；模型与其他设置未改动。',
+      }
+    } catch {
+      return { provider: id, status: 'failed', message: '密钥未更新；现有条目仍然可用，请稍后重试。' }
     }
   }
   async remove(providers: unknown, signal: AbortSignal): Promise<ImportOutcome[]> {

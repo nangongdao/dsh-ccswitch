@@ -35,6 +35,7 @@ export interface ImportRemote {
   refresh(providers: string[]): Promise<RemoteResult<ImportView>>
   importProviders(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
   resync(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
+  refreshKey(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
   remove(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
 }
 
@@ -57,6 +58,7 @@ export const importRemoteContribution: TypertRemoteContribution = {
     descriptor('refresh', ['providers'], true),
     descriptor('importProviders', ['providers'], true),
     descriptor('resync', ['providers'], true),
+    descriptor('refreshKey', ['providers'], true),
     descriptor('remove', ['providers'], true),
   ],
 }

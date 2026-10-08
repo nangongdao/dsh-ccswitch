@@ -77,6 +77,10 @@ function stub(overrides = {}) {
         calls.push(['remove', providers])
         return ok([{ provider: 'p-gemini', status: 'removed', message: '已从 DSH 移除，并清理了该线路写入的密钥条目。' }])
       },
+      refreshKey: async providers => {
+        calls.push(['refreshKey', providers])
+        return ok([{ provider: 'p-gemini', status: 'updated', message: '已用 CC Switch 里的当前 API Key 覆盖该供应商的密钥条目；模型与其他设置未改动。' }])
+      },
       ...overrides,
     },
   }
@@ -161,14 +165,27 @@ test('selects all, then imports only the selected providers in chunks', async ()
   await panel.unmount()
 })
 
-test('updates or removes an imported route, asking once before removing', async () => {
+test('updates models, replaces the key after a confirmation, or removes the import', async () => {
   const { calls, remote } = stub()
   const panel = await render(remote)
   const [row] = groupRows(panel.container, 1)
 
   await panel.click(button(row, '更新模型'))
   assert.deepEqual(calls, [['list'], ['resync', ['p-gemini']], ['list']])
-  assert.match(panel.container.querySelector('.dsh-ccswitch-import-feedback').textContent, /已同步 7 个模型/)
+  const updated = panel.container.querySelector('.dsh-ccswitch-import-feedback').textContent
+  assert.match(updated, /已同步 7 个模型/)
+  // A successful update is a success, not a failure: the summary line must agree.
+  assert.match(updated, /最近一次操作：成功 1 · 跳过 0 · 失败 0/)
+
+  const { calls: keyCalls, remote: keyRemote } = stub()
+  const keys = await render(keyRemote)
+  const [keyRow] = groupRows(keys.container, 1)
+  await keys.click(button(keyRow, '更新密钥'))
+  assert.deepEqual(keyCalls, [['list']], 'replacing a key must confirm before it writes')
+  assert.match(keys.container.textContent, /覆盖 DSH 里保存的那一份/)
+  await keys.click(button(keys.container, '确认换密钥'))
+  assert.deepEqual(keyCalls, [['list'], ['refreshKey', ['p-gemini']], ['list']])
+  assert.match(keys.container.querySelector('.dsh-ccswitch-import-feedback').textContent, /覆盖该供应商的密钥条目/)
 
   const { calls: second, remote: secondRemote } = stub()
   const removing = await render(secondRemote)
@@ -181,6 +198,7 @@ test('updates or removes an imported route, asking once before removing', async 
   assert.match(removing.container.querySelector('.dsh-ccswitch-import-feedback').textContent, /已从 DSH 移除/)
 
   await panel.unmount()
+  await keys.unmount()
   await removing.unmount()
 })
 
