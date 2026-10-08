@@ -130,6 +130,13 @@ test('groups routes into importable, already imported and dynamic connections', 
   assert.ok(button(imported[0], '更新模型'))
   assert.ok(button(imported[0], '移除'))
 
+  // Each row carries the native provider id a card is dispatched under, so the
+  // card can ask for its row and the row can ask for its card.
+  assert.equal(importable[0].getAttribute('data-dsh-ccswitch-row'), 'ccswitch-claude-1')
+  assert.equal(imported[0].getAttribute('data-dsh-ccswitch-row'), 'ccswitch-gemini-3')
+  assert.equal(button(importable[0], '定位到卡片'), undefined, 'only an imported route has a card to point at')
+  assert.ok(button(imported[0], '定位到卡片'))
+
   // Dynamic connections stay collapsed, with the reason for each.
   const dynamic = panel.container.querySelector('details.dsh-ccswitch-import-dynamic')
   assert.match(dynamic.querySelector('summary').textContent, /保持 CC Switch 动态连接 1/)
@@ -413,4 +420,37 @@ test('reloads the route list on demand and never selects more than one batch', a
   assert.equal(checkboxes(batch.container).filter(box => box.checked).length, 128)
   assert.match(batch.container.textContent, /一次最多导入 128 条/)
   await batch.unmount()
+})
+
+test('the panel and a card locate each other by the native provider id', async () => {
+  const panel = await render(stub().remote)
+  const row = panel.container.querySelector('[data-dsh-ccswitch-row="ccswitch-gemini-3"]')
+  assert.ok(row, 'an imported row must be findable by the id a card dispatches')
+
+  // Panel → card: the event must name the native id and say who asked, so only
+  // the card listening for it moves.
+  const asked = []
+  const hear = event => asked.push(event.detail)
+  document.addEventListener('dsh-ccswitch-locate', hear)
+  await panel.click(button(row, '定位到卡片'))
+  document.removeEventListener('dsh-ccswitch-locate', hear)
+  assert.deepEqual(asked, [{ target: 'ccswitch-gemini-3', from: 'panel' }])
+
+  // Card → panel: the row flashes, and a request for another route moves nothing.
+  const other = panel.container.querySelector('[data-dsh-ccswitch-row="ccswitch-claude-1"]')
+  const call = (target, from) => {
+    document.dispatchEvent(new dom.window.CustomEvent('dsh-ccswitch-locate', { detail: { target, from } }))
+  }
+  await act(async () => { call('ccswitch-gemini-3', 'card') })
+  assert.ok(row.classList.contains('dsh-ccswitch-flash'))
+  assert.equal(other.classList.contains('dsh-ccswitch-flash'), false)
+
+  // A malformed request (wrong shape, empty id, unknown sender) is ignored
+  // rather than throwing inside a listener the page cannot see.
+  await act(async () => {
+    call('', 'card')
+    document.dispatchEvent(new dom.window.CustomEvent('dsh-ccswitch-locate', { detail: null }))
+    document.dispatchEvent(new dom.window.CustomEvent('dsh-ccswitch-locate'))
+  })
+  await panel.unmount()
 })

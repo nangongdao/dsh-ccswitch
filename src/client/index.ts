@@ -1,5 +1,6 @@
 import { installModelSearch } from './search.ts'
 import { ImportPanel } from './import-panel.ts'
+import { IMPORT_NAMESPACE, ProviderCardExtras } from './provider-card.ts'
 import { importRemoteContribution } from '../import-contract.ts'
 import type { ImportRemote } from '../import-contract.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -8,6 +9,8 @@ import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-models/client'
 
 const PACKAGE_ID = 'dsh-ccswitch'
+/** The two seats this plugin fills, named so a rename cannot desync them. */
+type SeatName = 'settings.models.footer' | 'settings.models.provider-card'
 
 const styles = `
 .dsh-ccswitch-import { display:flex; flex-direction:column; gap:12px; max-width:720px; margin-top:20px; padding-top:16px; border-top:.5px solid var(--dsw-alias-border-l2); color:var(--dsw-alias-label-primary); font-family:var(--dsw-font-family); font-size:14px; line-height:22px; }
@@ -65,6 +68,14 @@ const styles = `
 .dsh-ccswitch-import-feedback li.is-warn:before { background:var(--dsw-alias-state-warn-label); }
 .dsh-ccswitch-import-feedback li.is-error { color:var(--dsw-alias-state-error-primary); }
 .dsh-ccswitch-import-feedback li.is-error:before { background:var(--dsw-alias-state-error-primary); }
+.dsh-ccswitch-card { display:flex; align-items:center; flex-wrap:wrap; gap:6px 8px; }
+.dsh-ccswitch-card-badge { flex:none; padding:1px 6px; border:.5px solid var(--dsw-alias-border-l3); border-radius:var(--dsw-radius-xs); color:var(--dsw-alias-label-secondary); font-size:11px; line-height:16px; }
+.dsh-ccswitch-card-note { flex:1 1 200px; min-width:0; margin:0; color:var(--dsw-alias-label-tertiary); font-size:12px; line-height:18px; }
+.dsh-ccswitch-card-link { flex:none; height:28px; padding:0 10px; border:none; border-radius:var(--dsw-radius-sm); background:0 0; color:var(--dsw-alias-label-tertiary); font:inherit; font-size:12px; line-height:18px; cursor:pointer; }
+.dsh-ccswitch-card-link:hover { background:var(--dsw-alias-interactive-bg-hover-solid); color:var(--dsw-alias-label-primary); }
+.dsh-ccswitch-card-link:focus-visible { box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary)); outline:none; }
+.dsh-ccswitch-flash { animation:dsh-ccswitch-flash 1.4s ease-out 1; }
+@keyframes dsh-ccswitch-flash { 0%, 100% { box-shadow:0 0 0 0 transparent } 15% { box-shadow:0 0 0 2px var(--dsw-alias-state-business-primary) } }
 [data-dsh-ccswitch-model-search] {
   flex: 0 0 auto;
   padding: 4px 4px 6px;
@@ -111,7 +122,7 @@ const styles = `
 `
 
 type ClientContext = Pick<Context, 'effect'> & {
-  slots: Pick<SlotCore, 'register'> & { inject(name: 'settings.models.footer', callback: () => (() => void)): void }
+  slots: Pick<SlotCore, 'register'> & { inject(name: SeatName, callback: () => (() => void)): void }
   remote: TypertClientRemote & { ccswitch: ImportRemote }
 }
 
@@ -127,10 +138,15 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => installModelSearch(), 'dsh-ccswitch: model name search')
   ctx.effect(async () => {
     const disposeRemote = await ctx.remote.$mount(importRemoteContribution)
+    const inject = () => ({ remote: ctx.remote.ccswitch })
     ctx.slots.inject('settings.models.footer', () => ctx.slots.register({
-      name: 'settings.models.footer', id: PACKAGE_ID, order: 20,
-      inject: () => ({ remote: ctx.remote.ccswitch }),
+      name: 'settings.models.footer', id: PACKAGE_ID, order: 20, inject,
     }, ImportPanel))
+    // One keyed registration covers every llm-pi-ai card: the seat dispatches on
+    // the settings namespace, so the badge filters per provider itself.
+    ctx.slots.inject('settings.models.provider-card', () => ctx.slots.register({
+      name: 'settings.models.provider-card', key: IMPORT_NAMESPACE, inject,
+    }, ProviderCardExtras))
     return disposeRemote
   }, 'dsh-ccswitch: native model import')
 }

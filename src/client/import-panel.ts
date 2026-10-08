@@ -1,6 +1,7 @@
-import { createElement as h, useEffect, useState } from 'react'
+import { createElement as h, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ImportOutcome, ImportRemote, ImportRow, ImportView } from '../import-contract.ts'
+import { LOCATE_EVENT, ROW_ATTRIBUTE, findByAttribute, readLocate, requestLocate, reveal } from './locate.ts'
 
 export interface ImportPanelProps { remote: ImportRemote }
 
@@ -44,6 +45,21 @@ export function ImportPanel({ remote }: ImportPanelProps) {
   const [feedback, setFeedback] = useState<Feedback[]>([])
   const [progress, setProgress] = useState<string>('')
   const [confirming, setConfirming] = useState('')
+  const section = useRef<HTMLElement | null>(null)
+
+  // A card in the list above can ask the panel to show its route. The panel is
+  // the footer entry, so it only ever has to move itself.
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const detail = readLocate(event)
+      if (detail === undefined || detail.from !== 'card') return
+      const root = section.current
+      if (root === null) return
+      reveal(findRow(root, detail.target))
+    }
+    document.addEventListener(LOCATE_EVENT, listener)
+    return () => document.removeEventListener(LOCATE_EVENT, listener)
+  }, [])
 
   const reload = async (): Promise<ImportView> => {
     const answer = await remote.list()
@@ -191,8 +207,20 @@ export function ImportPanel({ remote }: ImportPanelProps) {
       : entry.discovery === 'pending' ? `${base}（正在读取接口模型列表…）`
       : base
   }
-  const row = (key: string, head: ReactNode[], body: ReactNode[]) =>
-    h('li', { key, className: 'dsh-ccswitch-import-card' }, h('div', { className: 'dsh-ccswitch-import-row-head' }, ...head), ...body)
+  /**
+   * The panel's own copy of one route, for a locate request coming from a card.
+   * Cards dispatch on `targetProvider`, the only id they can see.
+   */
+  const findRow = (root: ParentNode, target: string): HTMLElement | undefined =>
+    findByAttribute(root, ROW_ATTRIBUTE, target)
+  /**
+   * One route's box. The locate attribute carries `targetProvider` — the native
+   * provider id a card is dispatched under — because a card cannot see the CC
+   * Switch route id this panel keys its rows by.
+   */
+  const row = (entry: ImportRow, head: ReactNode[], body: ReactNode[]) =>
+    h('li', { key: entry.provider, className: 'dsh-ccswitch-import-card', [ROW_ATTRIBUTE]: entry.targetProvider },
+      h('div', { className: 'dsh-ccswitch-import-row-head' }, ...head), ...body)
 
   /** A one-line peek at the catalog so "only one model?" is answerable without importing. */
   const sample = (entry: ImportRow): ReactNode => {
@@ -207,7 +235,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     return item === undefined ? null : status(item.message, item.tone)
   }
 
-  const importableRow = (entry: ImportRow) => row(entry.provider, [
+  const importableRow = (entry: ImportRow) => row(entry, [
     h('label', { className: 'dsh-ccswitch-import-check', key: 'check' },
       h('input', { type: 'checkbox', checked: chosen.includes(entry.provider), disabled: busy, onChange: () => toggle(entry.provider) }),
       h('span', { className: 'dsh-ccswitch-import-name' }, entry.name),
@@ -222,7 +250,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     note(entry.provider),
   ])
 
-  const importedRow = (entry: ImportRow) => row(entry.provider, [
+  const importedRow = (entry: ImportRow) => row(entry, [
     h('label', { className: 'dsh-ccswitch-import-check', key: 'check' },
       h('input', {
         type: 'checkbox', checked: markedLive.includes(entry.provider), disabled: busy,
@@ -236,6 +264,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     tag(APP_LABEL[entry.appType] ?? entry.appType, 'app'),
     tag(`${entry.models} 个模型`, 'models'),
     h('span', { className: 'dsh-ccswitch-import-row-actions', key: 'actions' },
+      button('定位到卡片', () => requestLocate(entry.targetProvider, 'panel'), { link: true }),
       button(phase === 'update' ? '更新中…' : '更新模型', () => void runOne(entry.provider, 'update')),
       armed('key', entry.provider)
         ? button('确认换密钥', () => void runOne(entry.provider, 'key'), { link: true })
@@ -261,7 +290,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
         : '“更新模型”重新读取接口模型列表，保留你手动添加的模型与现有密钥；“更新密钥”在 CC Switch 里换过密钥后使用。'),
   ])
 
-  return h('section', { className: 'dsh-ccswitch-import', 'aria-label': 'CC Switch 线路导入' },
+  return h('section', { className: 'dsh-ccswitch-import', 'aria-label': 'CC Switch 线路导入', ref: section },
     h('div', { className: 'dsh-ccswitch-import-title-row' },
       h('h3', { className: 'dsh-ccswitch-import-title' }, '从 CC Switch 导入线路'),
       button(phase === 'reload' ? '读取中…' : '重新载入线路', () => void reloadRoutes(), { link: true }),
@@ -323,7 +352,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     ) : null,
     dynamic.length > 0 ? h('details', { className: 'dsh-ccswitch-import-dynamic' },
       h('summary', { className: 'dsh-ccswitch-import-dynamic-summary' }, `保持 CC Switch 动态连接 ${dynamic.length}`),
-      h('ul', { className: 'dsh-ccswitch-import-rows' }, dynamic.map(entry => row(entry.provider, [
+      h('ul', { className: 'dsh-ccswitch-import-rows' }, dynamic.map(entry => row(entry, [
         h('span', { className: 'dsh-ccswitch-import-name', key: 'name' }, entry.name),
         tag(APP_LABEL[entry.appType] ?? entry.appType, 'app'),
         tag(`${entry.models} 个模型`, 'models'),

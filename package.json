@@ -1,6 +1,6 @@
 {
   "name": "dsh-ccswitch",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Read-only CC Switch provider bridge for DeepSeek Harness",
   "packageManager": "pnpm@11.7.0",
   "repository": {
