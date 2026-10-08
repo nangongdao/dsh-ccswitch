@@ -128,6 +128,22 @@ type ClientContext = Pick<Context, 'effect'> & {
 
 export const inject: readonly string[] = ['slots', 'remote']
 
+/**
+ * What the panel and the badge receive when the Remote contribution could not
+ * be mounted. Every method rejects with one explanation, and the panel already
+ * renders a read failure as a notice — so a wiring fault degrades into a
+ * visible message instead of taking the whole section down with it.
+ */
+const UNAVAILABLE = 'CC Switch 远程接口没有挂载成功，导入面板暂时不可用。请完全退出并重启 DSH 后重试；若仍然如此，请把这条消息与日志一起反馈。'
+const unavailableRemote: ImportRemote = {
+  list: async () => { throw new Error(UNAVAILABLE) },
+  refresh: async () => { throw new Error(UNAVAILABLE) },
+  importProviders: async () => { throw new Error(UNAVAILABLE) },
+  resync: async () => { throw new Error(UNAVAILABLE) },
+  refreshKey: async () => { throw new Error(UNAVAILABLE) },
+  remove: async () => { throw new Error(UNAVAILABLE) },
+}
+
 export function apply(ctx: ClientContext): void {
   const style = document.createElement('style')
   style.dataset.plugin = PACKAGE_ID
@@ -136,17 +152,42 @@ export function apply(ctx: ClientContext): void {
 
   ctx.effect(() => () => style.remove(), 'dsh-ccswitch: model search styles')
   ctx.effect(() => installModelSearch(), 'dsh-ccswitch: model name search')
+
+  // The seats read this indirection instead of `ctx.remote.ccswitch` directly.
+  // A slot's `inject` provider is evaluated on every render, so a stable object
+  // that swaps its target keeps the seats working (and honest about why they
+  // are empty) across a late or failed Remote mounting.
+  let active: ImportRemote = unavailableRemote
+  const remote: ImportRemote = {
+    list: (...args) => active.list(...args),
+    refresh: (...args) => active.refresh(...args),
+    importProviders: (...args) => active.importProviders(...args),
+    resync: (...args) => active.resync(...args),
+    refreshKey: (...args) => active.refreshKey(...args),
+    remove: (...args) => active.remove(...args),
+  }
+  const inject = () => ({ remote })
+
+  // Registration happens BEFORE the Remote is mounted, and synchronously.
+  // `ctx.slots.inject` only replays its callback when the seat is declared, so
+  // calling it here is safe at any time; doing it after `await $mount` used to
+  // mean that a single bad descriptor (or any other mounting failure) silently
+  // removed both the panel and the card badge from the UI.
+  ctx.slots.inject('settings.models.footer', () => ctx.slots.register({
+    name: 'settings.models.footer', id: PACKAGE_ID, order: 20, inject,
+  }, ImportPanel))
+  // One keyed registration covers every llm-pi-ai card: the seat dispatches on
+  // the settings namespace, so the badge filters per provider itself.
+  ctx.slots.inject('settings.models.provider-card', () => ctx.slots.register({
+    name: 'settings.models.provider-card', key: IMPORT_NAMESPACE, inject,
+  }, ProviderCardExtras))
+
   ctx.effect(async () => {
     const disposeRemote = await ctx.remote.$mount(importRemoteContribution)
-    const inject = () => ({ remote: ctx.remote.ccswitch })
-    ctx.slots.inject('settings.models.footer', () => ctx.slots.register({
-      name: 'settings.models.footer', id: PACKAGE_ID, order: 20, inject,
-    }, ImportPanel))
-    // One keyed registration covers every llm-pi-ai card: the seat dispatches on
-    // the settings namespace, so the badge filters per provider itself.
-    ctx.slots.inject('settings.models.provider-card', () => ctx.slots.register({
-      name: 'settings.models.provider-card', key: IMPORT_NAMESPACE, inject,
-    }, ProviderCardExtras))
-    return disposeRemote
-  }, 'dsh-ccswitch: native model import')
+    active = ctx.remote.ccswitch
+    return () => {
+      active = unavailableRemote
+      return disposeRemote()
+    }
+  }, 'dsh-ccswitch: native model import remote')
 }

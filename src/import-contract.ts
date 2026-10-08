@@ -1,4 +1,6 @@
-import type { InvocationDescriptor, RemoteResult, TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
+import type {
+  InvocationDescriptor, RemoteResult, TypertRemoteContribution, TypertSchema,
+} from '@deepseek-ai/dsh-typert-protocol'
 
 export interface ImportRow {
   provider: string
@@ -39,15 +41,38 @@ export interface ImportRemote {
   remove(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
 }
 
-// Public SRC-mode descriptors: the Host still validates every business input
-// and projects every output. No secrets are part of this wire contract.
+// Public descriptors: the Host still validates every business input and
+// projects every output. No secrets are part of this wire contract.
+/**
+ * Strict codec for the one business input this contract takes. The Client's
+ * `$mount` validator (`requireStrictInputs` -> `requireStrictCodec`) rejects
+ * every parameter whose codec is not strict with
+ * `client api: generated Remote … has no strict codec`, and that rejection
+ * happens before any namespace is installed. A non-strict parameter therefore
+ * does not degrade one method — it aborts the whole contribution, and every
+ * statement after `await ctx.remote.$mount(...)` never runs. The Host decodes
+ * through `codec.create().parse(value)`, so the factory has to be real even
+ * though the Client itself never calls it.
+ */
+const PROVIDERS_CODEC = {
+  mode: 'strict' as const,
+  typeSymbol: 'dsh-ccswitch#ProviderIds',
+  create: (): TypertSchema<string[]> => ({
+    parse: (value: unknown): string[] => {
+      if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
+        throw new TypeError('expected an array of CC Switch provider ids')
+      }
+      return value as string[]
+    },
+  }),
+}
 const descriptor = (method: string, parameters: string[], cancellable = false): InvocationDescriptor => ({
   id: `src:ccswitch#ccswitch/${method}`,
   service: 'ccswitch',
   namespace: 'ccswitch',
   method,
   invocation: { kind: 'direct' },
-  parameters: parameters.map(name => ({ name, wire: name, source: 'json', codec: { mode: 'src-json' } })),
+  parameters: parameters.map(name => ({ name, wire: name, source: 'json', codec: PROVIDERS_CODEC })),
   ...(cancellable ? { cancellation: { parameter: 'signal' as const } } : {}),
   result: { mode: 'src-json' },
 })

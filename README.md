@@ -54,7 +54,7 @@ dsh web --host 127.0.0.1 --port 3080
 
 同一条线路如果已经在「设置 → 模型」里导入为原生供应商，就不会再以 `CC Switch ·` 分组重复出现——一份由 DSH 原生供应商提供，另一份不再列出，避免同一线路出现两组模型。
 
-## 在「设置 → 模型」中管理（0.4.5）
+## 在「设置 → 模型」中管理（0.4.6）
 
 除了模型选择器，插件还会在 DSH 的「设置 → 模型」页面底部加入一个「从 CC Switch 导入线路」面板。面板开头的一句话先说明关系：**不导入也能用**——所有线路本来就以 `CC Switch ·` 分组出现在模型选择器里；导入只是把某条线路固定成 DSH 原生供应商，方便改显示名、单独调参或手动增删模型。
 
@@ -174,10 +174,17 @@ dsh web --host 127.0.0.1 --port 3080
 
 ## 版本兼容
 
-`dsh-ccswitch` `0.4.5` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout`、`dsh-settings`、`dsh-credentials`、`dsh-typert-protocol`、`dsh-client-ui-slots`、`dsh-client-ui-settings-models` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
+`dsh-ccswitch` `0.4.6` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout`、`dsh-settings`、`dsh-credentials`、`dsh-typert-protocol`、`dsh-client-ui-slots`、`dsh-client-ui-settings-models` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
 
 - DSH `0.2.0-rc.2` 及后续 `0.2.x`：使用本版本。
 - DSH `0.1.x`（含 `0.1.0-rc.7`）：请继续使用 `dsh-ccswitch` `0.1.1`，本版本不向下兼容。
+
+`0.4.6` 修复了「装了插件，但「设置 → 模型」里看不到 CC Switch 导入面板」：
+
+- 根因是导入服务描述符里的参数校验器用了非 `strict` 模式，而 DSH 客户端挂载远程接口时只接受 `strict`：校验失败会让**整个**导入服务装配失败，而不是只让某个方法失效。因为面板与卡片徽标的注册排在这句挂载之后，一句失败就把两者一起静默删掉了——插件照常出现在模型选择器的「其他模型」里，设置页却什么都没有。现在参数校验器是 `strict` 并带真实的 `parse`（Host 每次调用都会用它校验入参）。
+- 两个界面入口改为在挂载**之前**注册，与挂载结果解耦：今后任何装配失败都不会再把面板和卡片徽标一起吞掉。
+- 万一远程接口确实没挂上，面板会明确显示「CC Switch 远程接口没有挂载成功……」而不是空白；这条消息也会写进日志，便于反馈。
+- 新增 3 个回归测试锁住这两点：参数校验器必须能真正解析入参并拒绝非法值、席位必须在挂载前注册、卸载后席位退回带说明的降级实现。
 
 `0.4.5` 让面板与原生供应商卡片互相定位：
 
