@@ -185,26 +185,26 @@
 ## S10 活体端到端验证（真实 CC Switch DB + 真实网络）
 
 - **Observed**：单测只能模拟 stream 契约，无法证明「真实 provider 的响应经插件映射后仍是合法 chunk」。
-  本机存在真实 CC Switch 库 `D:\.cc-switch\cc-switch.db`（8,957,952 B，121 providers / 109 endpoints，
+  本机存在真实 CC Switch 库（8,957,952 B，121 providers / 109 endpoints，
   app_type 覆盖 claude / claude-desktop / codex / gemini / opencode）。
 - **Modified**：无源码改动。新增三个临时脚本（验证后删除）：`.verify-live.mjs`（把 built `lib/index.mjs`
   装进真实 cordis `Context`，stub `llm.registerAdapter` 记录注册结果）、`.verify-stream.mjs`（取真实路由 →
   `resolveCredential` → `prepareCall` → 发真实最小请求）、`.verify-modes.mjs`（text / tool / abort 三模式）。
 - **Tested**：
   - **注册面**：81 条路由全部注册成功（authKind `{"claude-token":46,"api-key":35}`、protocol
-    `{"anthropic-messages":46,"openai-responses":35}`）；`providerInfo` 返回 `{id, name:"liwan"}`；
+    `{"anthropic-messages":46,"openai-responses":35}`）；`providerInfo` 返回 `{id, name:"<provider>"}`；
     `listModels` 的 `inputModalities` 为 `["text","image"]`；`resolveModel` 的 `context.contextWindow` = 262144；
     catalog 未命中以 code `NO_ADAPTER` reject —— 证明 `Promise.resolve().then(...)` 的延迟求值语义正确；
     **81/81 路由 resolveModel 全部成功**。
-  - **真实网络流**：TrueSOTA（openai-responses / gpt-5.5）34758ms → text `"OK"`，
+  - **真实网络流**：provider A（openai-responses / gpt-5.5）34758ms → text `"OK"`，
     usage `{"inputTokens":551,"outputTokens":5,"totalTokens":4396,"cacheReadTokens":3840}`，
     finish `{"kind":"stop"}`，并发布 reasoning（efforts minimal/low/medium/high + `defaultEffort:"minimal"`）；
-    liwan（anthropic-messages / DeepSeek-V4.1-Flash）2673ms → block-end reasoning，finish `{"kind":"stop"}`；
-    ciallo 2891ms → finish `{"kind":"max-tokens"}`（证明 length 映射）。
-  - **tool-call 路径**：`node .verify-modes.mjs tool TrueSOTA` → block-start `tool-call`，
+    provider B（anthropic-messages / DeepSeek-V4.1-Flash）2673ms → block-end reasoning，finish `{"kind":"stop"}`；
+    provider C 2891ms → finish `{"kind":"max-tokens"}`（证明 length 映射）。
+  - **tool-call 路径**：`node .verify-modes.mjs tool <provider A>` → block-start `tool-call`，
     5 个 `tool-call-delta`（id 稳定、arguments 分片拼接），block-end `{type:"tool-call", name:"get_weather",
     arguments:"{\"city\":\"Paris\"}"}`，`JSON.parse` 成功，finish `{"kind":"tool-calls"}`。
-  - **abort 路径**：`node .verify-modes.mjs abort liwan` → 1207ms 时 caller abort 生效，
+  - **abort 路径**：`node .verify-modes.mjs abort <provider B>` → 1207ms 时 caller abort 生效，
     finish `{"kind":"aborted","failure":{"message":"This operation was aborted","code":"ABORTED"}}`，
     watchdog 正常拆除（无悬挂句柄报错）。
   - **错误分类**：522 → `SERVER`；401 "Invalid token" → `AUTH`；503 model_not_found → `SERVER`；
@@ -213,6 +213,45 @@
   401 token 失效），非插件缺陷。
 - **Not verified**：未在 DSH Desktop 进程内（经 `dsh plugin` 装载）跑真实对话；未验证图片附件在
   `ctx.fs` 存在时端到端拿到只读路径（S7c）；未对真实 Gemini OAuth 端点发请求（S6b）。
-  注：本插件当前**并未安装进 desktop profile**（`C:\Users\20777\.dsh\profiles\desktop` 的依赖与
-  `cordis.patch.yml` 中都没有它）。
+  注：当时本插件**并未安装进 desktop profile**，安装装载验证见 S11。
+
+## S11 仓库发布与安装装载验证
+
+- **Observed**：升级只存在于本地工作区，用户要求「上传到仓库后通过仓库安装」。仓库事实：
+  `origin` = `github.com/nangongdao/dsh-ccswitch`（用户 fork，admin+push），
+  上游 `upJiang/dsh-ccswitch` 只读（permissions.push=false）且仍停在 0.1.1。
+  `package.json` 的 `repository.url` 却写着 `upJiang` —— 按 README 命令安装会拿到旧版。
+- **Modified**：
+  - 提交两个 commit 并推送 `origin/main`：`8d3f00f`（升级本体，19 files / +2344 −717）、
+    `c3a29d8`（元数据修正）。`lib/` 产物已入库，`github:` 安装无需构建步骤。
+  - `package.json` 的 `repository`/`homepage`/`bugs` 与 README 安装命令改指 `nangongdao`。
+  - **两处先前臆造的清单字段被纠正**（本轮才发现）：
+    1. 删除 `dsh.compatibility.dshReleases` —— 全 app 搜索证明该字段**在 DSH 中不存在**；
+       真实门禁是 `dsh-app-boot` 的 `evaluatePluginCompatibility()`：对每个
+       `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` peer 做
+       `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`，
+       不兼容则抛 `Plugin <name>@<version> is incompatible with dsh <runtime>` 并拒绝装载；
+       豁免机制是 profile 级 `compatibility.json`（精确 `name@version` ↔ 精确 runtime 版本）。
+    2. peerDependencies 由精确 `0.2.0-rc.2` 放宽为 `^0.2.0-rc.2`：实测
+       `0.2.0-rc.2` 精确范围对 `0.2.0-rc.3` / `0.2.1-alpha.1` 均不满足，
+       会让插件在后续 0.2.x 上直接拒绝装载，与 README 承诺矛盾。
+- **Tested**：
+  - 用官方 `evaluatePluginCompatibility` 直接跑本仓库 manifest：**ISSUE: NONE (compatible)**。
+  - 主机确实携带全部运行时依赖（`@deepseek-ai/` 下 dsh-llm / dsh-attachment / dsh-brand / dsh-fs /
+    dsh-timeout / dsh-client-ui-model-selection 均为 0.2.0-rc.2，`@earendil-works/pi-ai` 0.87.1，
+    `./api/*` 子路径导出存在）。
+  - **真实安装装载验证**：在临时 `DSH_HOME` 建 scratch profile，执行
+    `dsh plugin --profile scratch add github:nangongdao/dsh-ccswitch` → EXIT=0，
+    装入 `dsh-ccswitch@0.2.0`；`--dump-config` 显示 `# == dsh-ccswitch` 条目已挂载；
+    随后 `dsh --profile scratch` 启动成功，进程**实际 import 了本插件**（输出
+    `ExperimentalWarning: SQLite is an experimental feature`，来源即本插件
+    `lib/index.mjs:16` 的 `import { DatabaseSync } from "node:sqlite"`），
+    且所有 `@deepseek-ai/*` peer 均从主机解析成功 —— 证明装载链路与依赖解析均可用。
+  - 临时目录 `E:\dsh-ccswitch-installtest` 验证后已删除（删除前 `Resolve-Path` 确认）。
+- **Verified**：远端 `origin/main` = `c3a29d8`；GitHub 返回的 `package.json` 为
+  `version 0.2.0` / `repository.url` = nangongdao / `dsh-llm` peer = `^0.2.0-rc.2` /
+  无 `dsh.compatibility`；`lib/index.mjs` HTTP 200。
+- **Not verified**：未在真实 desktop profile 内安装（避免动用户正在运行的环境）；
+  未在装载后实际发一次真实对话请求（S10 已在进程外覆盖该链路）。
+
 
