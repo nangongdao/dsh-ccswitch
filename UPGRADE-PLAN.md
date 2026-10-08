@@ -254,4 +254,53 @@
 - **Not verified**：未在真实 desktop profile 内安装（避免动用户正在运行的环境）；
   未在装载后实际发一次真实对话请求（S10 已在进程外覆盖该链路）。
 
+## S12 修复：CC Switch 自定义数据目录下看不到 provider（0.2.0 → 0.2.1）
+
+- **Observed**：
+  - 用户安装后在 DSH 中看不到任何 ccswitch provider。插件确实已装入
+    `C:\Users\20777\.dsh\profiles\desktop`（`dependencies` 与 `dsh.profile.bundles` 均含 `dsh-ccswitch`，
+    `node_modules/dsh-ccswitch` version = 0.2.0），profile `cordis.yml` 只有 `[]`（树由 bundles 组合）。
+  - 根因：`src/paths.ts` 默认库路径写死 `homedir()/.cc-switch/cc-switch.db`，
+    而 CC Switch 4.0.4 允许在设置里改数据目录，本机即为 `D:\.cc-switch`。
+    证据：`%APPDATA%\com.ccswitch.desktop\app_paths.json` = `{"app_config_dir_override": "D:\\.cc-switch"}`
+    （该值是**目录**而非 db 文件）；`D:\.cc-switch\cc-switch.db` 8.9 MB / 121 providers / 109 endpoints
+    （2026/10/7 活跃），而 `C:\Users\20777\.cc-switch\cc-switch.db` 19.7 MB / 17 providers / 0 endpoints
+    （2026/9/4 陈旧）。CC Switch 自身在目录缺失时会回退默认路径（exe 字符串
+    「Store 中配置的 app_config_dir 不存在: ... 将使用默认路径」）。
+  - stub ctx 复现：默认库只注册 **2** 条路由；`DSH_CCSWITCH_DB=D:\.cc-switch\cc-switch.db` 注册 **81** 条。
+- **Modified**：
+  - `src/paths.ts` 重写：新增导出 `PathProbe { isDirectory; readText }`（注入点，测试用内存探针）；
+    新增 `configuredDataDirectory()`，依次探测 `%APPDATA%\com.ccswitch.desktop`、
+    `~/.config/com.ccswitch.desktop`、`~/Library/Application Support/com.ccswitch.desktop` 下的
+    `app_paths.json`，剥 BOM 后取 `app_config_dir_override`，要求 string + trim 非空 +
+    绝对路径 + `probe.isDirectory()` 为真才采用，否则回退 `~/.cc-switch`。
+    核心行：`const resolvedDatabase = database ?? paths.join(configuredDataDirectory(...) ?? paths.join(home, '.cc-switch'), CC_SWITCH_DATABASE)`。
+    显式 `database`（即 `DSH_CCSWITCH_DB`）优先级最高且**完全不触碰文件系统**；
+    `codexOAuthStore` 等其余字段计算方式不变。
+    设计取舍：只判**目录存在**而非 db 文件存在，以复刻 CC Switch 自身语义，避免「目录在但库被删」时
+    静默读到陈旧库。
+  - `test/paths.test.js` 重写为 9 个用例（原 3 个断言保持成立，补第 4 参探针）；
+    新增 win32 跟随 `D:\.cc-switch`、POSIX `.config`、macOS Application Support、BOM 容忍、
+    6 种回退（目录缺失/空白/相对路径/非字符串/键缺失/JSON 畸形）、文件不可读、
+    以及「显式 database 不触碰探针」。
+  - `package.json` version 0.2.0 → **0.2.1**；README 更新「CC Switch 使用了自定义目录」一节
+    （说明自动跟随 + 三个平台的 app_paths.json 位置）与排障第 5 条。
+- **Tested**：
+  - `pnpm typecheck` EXIT=0；`pnpm test` **67 tests / 67 pass / 0 fail**；`pnpm build` EXIT=0。
+  - 活体探针用真实 `resolveCcSwitchPaths()` 输出 `database = D:\.cc-switch\cc-switch.db`
+    （修复前为 `C:\Users\20777\.cc-switch\...`）；`CcSwitchRepository.read()` 在真实库上得到 **81 条路由**
+    （claude 46 / codex 35），与库中计数吻合。
+  - **升级路径实测**（两个临时 scratch profile，均用 `DSH_HOME` 隔离，不触碰用户环境）：
+    先按旧提交 `cd0f9a1` 装出 0.2.0，再把 specifier 改回不带 pin 的
+    `github:nangongdao/dsh-ccswitch`（复刻用户当前状态：specifier 无 pin、lockfile 仍钉旧 commit），
+    然后执行 README 的原样命令 `dsh plugin --profile scratch add github:nangongdao/dsh-ccswitch`
+    → EXIT=0，**0.2.0 → 0.2.1**，lockfile 重新钉到 `093d1d1c759c7aed1b74c8e2f3acdb480bfbb151`。
+    装载后 `lib/index.mjs` 的 SHA256 与仓库 `pnpm build` 产物**逐字节一致**，
+    用 stub ctx 跑其 `apply()` 注册 **81** 条路由。
+- **Verified**：`origin/main` = `093d1d1`（commit「fix: 自动发现 CC Switch 自定义数据目录，修复看不到 provider」，
+  5 files changed / +300 −13）；临时目录 `E:\dsh-ccswitch-upgradetest{,2}` 与全部 `.probe-*` 探针已删除
+  （删除前 `Resolve-Path` 逐个确认路径相符）。
+- **Not verified**：未在用户正在运行的 desktop profile 内执行升级（未动用户环境，改由用户在 DSH 内自行重装）；
+  未在升级后由用户在 GUI 中肉眼确认 provider 列表（已由 stub ctx 的 81 条注册 + 真实库读取覆盖）。
+
 
