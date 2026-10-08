@@ -20,9 +20,9 @@ globalThis.MutationObserver = dom.window.MutationObserver
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const { apply } = await import('../src/client/index.ts')
-const { importRemoteContribution } = await import('../src/import-contract.ts')
+const { RESERVED_REMOTE_METHODS, importRemoteContribution } = await import('../src/import-contract.ts')
 
-const METHODS = ['list', 'refresh', 'importProviders', 'resync', 'refreshKey', 'remove']
+const METHODS = ['list', 'refresh', 'importProviders', 'resync', 'refreshKey', 'removeProviders']
 
 function context(mount) {
   const labels = []
@@ -69,8 +69,20 @@ const mounted = {
   importProviders: async () => ({ ok: true, value: [] }),
   resync: async () => ({ ok: true, value: [] }),
   refreshKey: async () => ({ ok: true, value: [] }),
-  remove: async () => ({ ok: true, value: [] }),
+  removeProviders: async () => ({ ok: true, value: [] }),
 }
+
+test('no remote method is named like a member of the namespace service', () => {
+  // `$mount` runs `assertMethodAvailable` per descriptor and refuses the WHOLE
+  // contribution when a name collides with `RemoteNamespaceService.prototype`.
+  // `remove` is that prototype's unwinding helper: naming the removal method
+  // `remove` made the client mount fail, which silently emptied the panel.
+  for (const { method } of importRemoteContribution.descriptors) {
+    assert.ok(!RESERVED_REMOTE_METHODS.includes(method),
+      `${method} collides with the Remote namespace service`)
+  }
+  assert.ok(!RESERVED_REMOTE_METHODS.includes('removeProviders'))
+})
 
 test('every remote parameter carries a strict codec the Host can actually decode', () => {
   const descriptors = importRemoteContribution.descriptors

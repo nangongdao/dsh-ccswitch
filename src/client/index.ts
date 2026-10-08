@@ -141,7 +141,7 @@ const unavailableRemote: ImportRemote = {
   importProviders: async () => { throw new Error(UNAVAILABLE) },
   resync: async () => { throw new Error(UNAVAILABLE) },
   refreshKey: async () => { throw new Error(UNAVAILABLE) },
-  remove: async () => { throw new Error(UNAVAILABLE) },
+  removeProviders: async () => { throw new Error(UNAVAILABLE) },
 }
 
 export function apply(ctx: ClientContext): void {
@@ -164,7 +164,7 @@ export function apply(ctx: ClientContext): void {
     importProviders: (...args) => active.importProviders(...args),
     resync: (...args) => active.resync(...args),
     refreshKey: (...args) => active.refreshKey(...args),
-    remove: (...args) => active.remove(...args),
+    removeProviders: (...args) => active.removeProviders(...args),
   }
   const inject = () => ({ remote })
 

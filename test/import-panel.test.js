@@ -73,8 +73,8 @@ function stub(overrides = {}) {
         calls.push(['resync', providers])
         return ok([{ provider: 'p-gemini', status: 'updated', message: '已同步 7 个模型；密钥与其他设置未改动。' }])
       },
-      remove: async providers => {
-        calls.push(['remove', providers])
+      removeProviders: async providers => {
+        calls.push(['removeProviders', providers])
         return ok([{ provider: 'p-gemini', status: 'removed', message: '已从 DSH 移除，并清理了该线路写入的密钥条目。' }])
       },
       refreshKey: async providers => {
@@ -205,7 +205,7 @@ test('updates models, replaces the key after a confirmation, or removes the impo
   assert.deepEqual(second, [['list']], 'removing must confirm before it writes')
   assert.match(removing.container.textContent, /移除会删除这个 DSH 原生供应商/)
   await removing.click(button(removing.container, '确认移除'))
-  assert.deepEqual(second, [['list'], ['remove', ['p-gemini']], ['list']])
+  assert.deepEqual(second, [['list'], ['removeProviders', ['p-gemini']], ['list']])
   assert.match(removing.container.querySelector('.dsh-ccswitch-import-feedback').textContent, /已从 DSH 移除/)
 
   await panel.unmount()
@@ -300,6 +300,27 @@ test('surfaces read-only, unavailable and failed reads instead of rendering a br
   await rejected.unmount()
 })
 
+test('an action failure reports its real cause instead of one generic sentence', async () => {
+  let attempts = 0
+  const { remote } = stub({
+    list: async () => {
+      // The first read backs the initial render; the reload then fails, which
+      // is the path a real broken Remote takes through `guard`.
+      attempts += 1
+      if (attempts === 1) return { ok: true, value: view() }
+      throw new Error('CC Switch 远程接口没有挂载成功，导入面板暂时不可用。')
+    },
+  })
+  const panel = await render(remote)
+
+  await panel.click(button(panel.container, '重新载入线路'))
+
+  const alert = panel.container.querySelector('[role="alert"]')
+  assert.match(alert.textContent, /^操作未完成：/)
+  assert.match(alert.textContent, /远程接口没有挂载成功/)
+  await panel.unmount()
+})
+
 test('a missing key and an empty catalog are reported instead of hidden', async () => {
   const rows = [
     { ...installed, credential: 'missing' },
@@ -362,7 +383,7 @@ test('runs one action over every marked import and keeps only the failures marke
     list: async () => { calls.push(['list']); return ok(view({ rows })) },
     resync: async providers => map('resync', providers),
     refreshKey: async providers => map('refreshKey', providers),
-    remove: async providers => map('remove', providers),
+    removeProviders: async providers => map('removeProviders', providers),
   })
   const panel = await render(remote)
   const markedRow = name => Array.from(panel.container.querySelectorAll('li'))
@@ -398,7 +419,7 @@ test('runs one action over every marked import and keeps only the failures marke
   assert.deepEqual(calls, [], 'removing must confirm before it writes')
   assert.match(panel.container.querySelector('[role="alert"]').textContent, /确认移除会删除这 1 个 DSH 原生供应商/)
   await panel.click(button(panel.container, '确认移除 (1)'))
-  assert.deepEqual(calls, [['remove', ['p-b']], ['list']])
+  assert.deepEqual(calls, [['removeProviders', ['p-b']], ['list']])
 
   await panel.unmount()
 })

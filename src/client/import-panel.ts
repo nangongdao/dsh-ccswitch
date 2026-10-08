@@ -89,8 +89,14 @@ export function ImportPanel({ remote }: ImportPanelProps) {
     if (phase !== '') return
     setPhase(next)
     setFailure('')
-    try { await action() } catch {
-      setFailure('操作未完成。请重新读取后重试；源 API Key 与 DSH 写入权限须有效。')
+    try { await action() } catch (error) {
+      // Surface what actually failed. The previous fixed sentence hid every
+      // distinct cause (a missing Remote namespace, a rejected write, a
+      // disappeared route) behind one unactionable line.
+      const detail = error instanceof Error ? error.message.trim() : ''
+      setFailure(detail === ''
+        ? '操作未完成。请重新读取后重试；源 API Key 与 DSH 写入权限须有效。'
+        : `操作未完成：${detail}`)
     } finally { setPhase(''); setProgress('') }
   }
   const refreshSelected = (targets: readonly string[]) => guard('refresh', async () => {
@@ -146,7 +152,7 @@ export function ImportPanel({ remote }: ImportPanelProps) {
       try {
         const answer = kind === 'update' ? await remote.resync(chunk)
           : kind === 'key' ? await remote.refreshKey(chunk)
-          : await remote.remove(chunk)
+          : await remote.removeProviders(chunk)
         if (answer.ok) outcomes.push(...answer.value)
         else refused = '这次操作没有完成，未做改动。'
       } catch { refused = '这次操作没有完成，未做改动。' }

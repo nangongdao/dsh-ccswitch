@@ -38,8 +38,22 @@ export interface ImportRemote {
   importProviders(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
   resync(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
   refreshKey(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
-  remove(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
+  removeProviders(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
 }
+
+/**
+ * Names the Client's Remote namespace service already owns. `$mount` runs
+ * `assertMethodAvailable` per descriptor and refuses the whole contribution
+ * when a method name is a namespace field or exists on
+ * `RemoteNamespaceService.prototype` — `remove` (its unwinding helper) is the
+ * one this package used to collide with, so the removal method is exported as
+ * `removeProviders`.
+ */
+export const RESERVED_REMOTE_METHODS: readonly string[] = [
+  'ctx', 'empty', 'invokeRemote', 'methods', 'name', 'namespace',
+  'remove', 'has', 'install', 'installDirect', 'installScoped',
+  'assertMethodAvailable', 'constructor',
+]
 
 // Public descriptors: the Host still validates every business input and
 // projects every output. No secrets are part of this wire contract.
@@ -84,6 +98,6 @@ export const importRemoteContribution: TypertRemoteContribution = {
     descriptor('importProviders', ['providers'], true),
     descriptor('resync', ['providers'], true),
     descriptor('refreshKey', ['providers'], true),
-    descriptor('remove', ['providers'], true),
+    descriptor('removeProviders', ['providers'], true),
   ],
 }

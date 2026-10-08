@@ -439,7 +439,7 @@ test('public SRC remote markers work through the real Gateway and dispose cleanl
   f.routes[0] = route({ fingerprint: 'two', models: [{ ...model, id: 'gpt-5.7-sol' }] })
   const updated = await ctx.typertGateway.invoke({ namespace: 'ccswitch', method: 'resync', args: { providers: [f.routes[0].provider] } })
   assert.equal(updated[0].status, 'updated')
-  const removed = await ctx.typertGateway.invoke({ namespace: 'ccswitch', method: 'remove', args: { providers: [f.routes[0].provider] } })
+  const removed = await ctx.typertGateway.invoke({ namespace: 'ccswitch', method: 'removeProviders', args: { providers: [f.routes[0].provider] } })
   assert.equal(removed[0].status, 'removed')
   assert.equal(importedProviderId(f.routes[0]) in f.providers, false)
   await controller.dispose()
