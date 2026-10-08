@@ -131,6 +131,11 @@ export class CcSwitchAdapter extends LlmAdapter {
     return true
   }
 
+  /** Detached catalog snapshot for native import; credentials are never included. */
+  modelsForRoute(route: CcSwitchRoute): readonly CcSwitchModel[] {
+    return (this.discovered.get(route.provider) ?? route.models).map(model => ({ ...model }))
+  }
+
   clearDiscoveredModels(): void {
     if (this.discovered.size === 0) return
     this.discovered.clear()

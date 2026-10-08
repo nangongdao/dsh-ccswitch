@@ -20,6 +20,9 @@ await build({
   outDir: 'lib',
   format: 'cjs',
   platform: 'browser',
+  // Keep React external: the host page owns the single React instance, and a
+  // second copy would break every hook the panel uses.
+  deps: { neverBundle: ['react', 'react/jsx-runtime'] },
   target: 'es2022',
   dts: false,
   sourcemap: true,

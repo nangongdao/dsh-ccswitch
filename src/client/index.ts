@@ -1,8 +1,26 @@
 import { installModelSearch } from './search.ts'
+import { ImportPanel } from './import-panel.ts'
+import { importRemoteContribution } from '../import-contract.ts'
+import type { ImportRemote } from '../import-contract.ts'
+import type { Context } from '@deepseek-ai/cordis'
+import type { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
+import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
+import type {} from '@deepseek-ai/dsh-client-ui-settings-models/client'
 
 const PACKAGE_ID = 'dsh-ccswitch'
 
 const styles = `
+.dsh-ccswitch-import { display:flex; flex-direction:column; gap:10px; margin-top:16px; padding:16px; border:1px solid var(--dsw-alias-border-l2); border-radius:12px; color:var(--dsw-alias-label-primary); font-size:13px; }
+.dsh-ccswitch-import h3, .dsh-ccswitch-import p { margin:0; }
+.dsh-ccswitch-import-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.dsh-ccswitch-import button { cursor:pointer; padding:7px 10px; border:1px solid var(--dsw-alias-border-l2); border-radius:6px; background:transparent; color:inherit; font:inherit; }
+.dsh-ccswitch-import button:disabled { cursor:default; opacity:.5; }
+.dsh-ccswitch-import input[type="search"] { width:100%; box-sizing:border-box; padding:8px; border:1px solid var(--dsw-alias-border-l2); border-radius:6px; background:transparent; color:inherit; }
+.dsh-ccswitch-import-rows { max-height:360px; overflow:auto; display:flex; flex-direction:column; gap:10px; list-style:none; margin:0; padding:0; }
+.dsh-ccswitch-import-rows li { display:flex; flex-direction:column; gap:4px; }
+.dsh-ccswitch-import-rows label { display:flex; align-items:center; gap:8px; }
+.dsh-ccswitch-import small, .dsh-ccswitch-import-note { color:var(--dsw-alias-label-tertiary); }
+.dsh-ccswitch-import [role="alert"] { color:var(--dsw-alias-state-error-primary); }
 [data-dsh-ccswitch-model-search] {
   flex: 0 0 auto;
   padding: 4px 4px 6px;
@@ -48,11 +66,12 @@ const styles = `
 }
 `
 
-interface ClientContext {
-  effect(effect: () => (() => void), description?: string): void
+type ClientContext = Pick<Context, 'effect'> & {
+  slots: Pick<SlotCore, 'register'> & { inject(name: 'settings.models.footer', callback: () => (() => void)): void }
+  remote: TypertClientRemote & { ccswitch: ImportRemote }
 }
 
-export const inject: readonly string[] = []
+export const inject: readonly string[] = ['slots', 'remote']
 
 export function apply(ctx: ClientContext): void {
   const style = document.createElement('style')
@@ -62,4 +81,12 @@ export function apply(ctx: ClientContext): void {
 
   ctx.effect(() => () => style.remove(), 'dsh-ccswitch: model search styles')
   ctx.effect(() => installModelSearch(), 'dsh-ccswitch: model name search')
+  ctx.effect(async () => {
+    const disposeRemote = await ctx.remote.$mount(importRemoteContribution)
+    ctx.slots.inject('settings.models.footer', () => ctx.slots.register({
+      name: 'settings.models.footer', id: PACKAGE_ID, order: 20,
+      inject: () => ({ remote: ctx.remote.ccswitch }),
+    }, ImportPanel))
+    return disposeRemote
+  }, 'dsh-ccswitch: native model import')
 }

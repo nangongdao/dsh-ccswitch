@@ -52,6 +52,33 @@ dsh web --host 127.0.0.1 --port 3080
 
 插件会自动读取 CC Switch 后续的配置变化。添加、删除或修改 provider 后，通常不需要重新安装插件。
 
+## 在「设置 → 模型」中管理（0.3.0）
+
+除了模型选择器，插件还会在 DSH 的「设置 → 模型」页面底部加入一个「从 CC Switch 导入」面板：
+
+1. 打开「设置 → 模型」，滚动到页面底部。
+2. 面板列出所有 CC Switch 路由（名称、应用类型、当前模型数），可用筛选框过滤。
+3. 勾选要导入的供应商（API Key 类型），可先点「获取所选模型列表」刷新接口返回的模型，再点「导入所选」。
+
+导入会在 DSH 中生成一个独立的原生供应商（名为 `ccswitch-<应用>-<哈希>`），API Key 只以引用（`..._API_KEY`）写入 DSH 凭据存储，之后可以像其他原生供应商一样修改显示名、接口地址和模型列表。**导入后由 DSH 独立管理**：CC Switch 之后修改同一个 provider 不会覆盖它，重复导入也会跳过已有配置。
+
+以下情况继续使用原有的动态连接，不会被导入：
+
+- OAuth / 登录令牌类型（Codex ChatGPT 登录、Gemini OAuth）：短期令牌不复制。
+- 当前 DSH 原生适配器不支持的协议（例如 Gemini 的 `google-generative-ai`）：仍作为动态路由出现在模型选择器中。
+- 目标凭据引用已被占用，或 DSH 配置为只读：导入跳过或失败，不会覆盖既有密钥。
+
+导入失败时插件会清理本次写入的临时凭据，并且不会把密钥或上游错误原文回显到界面。
+
+### 为什么有些线路的模型很少
+
+每条线路显示的模型来自两个来源，合并后去重：
+
+1. CC Switch 自身的配置（默认模型；Claude 线路还会带上已配置的 `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `SONNET` / `OPUS` 等）。
+2. 该线路 `baseURL` 的模型列表接口（`/models`，按协议自动补 `/v1beta`、Anthropic `/v1` 等路径，并跟随 `has_more`/`nextPageToken`/`next` 分页，最多 10 页、10000 个模型）。
+
+如果上游接口返回 404/401、超时或不是模型列表，插件会保留已有模型，并在导入面板标为「接口获取失败，保留已有模型」——这**不是**完整目录；可以点「获取所选模型列表」重试，导入后也可以手动添加模型 ID。接口返回列表只代表“接口列出了这个模型”，不保证每个模型都能通过该线路的协议调用。
+
 ## 只显示部分 provider
 
 默认显示 CC Switch 中所有可用 provider。如果只想使用其中一部分，可以创建配置文件。
@@ -133,10 +160,12 @@ dsh web --host 127.0.0.1 --port 3080
 
 ## 版本兼容
 
-`dsh-ccswitch` `0.2.2` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
+`dsh-ccswitch` `0.3.0` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout`、`dsh-settings`、`dsh-credentials`、`dsh-typert-protocol`、`dsh-client-ui-slots`、`dsh-client-ui-settings-models` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
 
 - DSH `0.2.0-rc.2` 及后续 `0.2.x`：使用本版本。
 - DSH `0.1.x`（含 `0.1.0-rc.7`）：请继续使用 `dsh-ccswitch` `0.1.1`，本版本不向下兼容。
+
+`0.3.0` 增加了「设置 → 模型」中的原生导入面板：可把 CC Switch 的 API Key 供应商一次性导入为 DSH 原生供应商（密钥只存引用），并为每条线路补齐端点模型发现——支持 Anthropic 游标分页、Gemini `nextPageToken`、OpenAI 风格 `next` 链接与 `models` 映射表，识别分页循环/截断并保留已有模型；Claude 线路默认模型补充 `ANTHROPIC_DEFAULT_*` 系列。原生适配器缺少 `settings`/`credentials` 时，导入面板自动降级，原有动态路由不受影响。
 
 `0.2.2` 为每个 provider 分组增加 `CC Switch · 应用 · 原名称` 标识；修复同一路由的模型/名称更新和端点模型发现后未通知 DSH 刷新目录的问题，并纠正桌面版安装说明。
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-ccswitch",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Read-only CC Switch provider bridge for DeepSeek Harness",
   "packageManager": "pnpm@11.7.0",
   "repository": {
@@ -34,7 +34,12 @@
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
-  "files": ["lib", "src", "README.md", "cordis.patch.yml"],
+  "files": [
+    "lib",
+    "src",
+    "README.md",
+    "cordis.patch.yml"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
@@ -44,21 +49,39 @@
     "@deepseek-ai/cordis": "^4.0.4",
     "@deepseek-ai/dsh-attachment": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-brand": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings-models": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-credentials": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-fs": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-llm": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-settings": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-timeout": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "^0.2.0-rc.2",
     "@earendil-works/pi-ai": "^0.87.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-api-gateway": "0.2.0-rc.2",
     "@deepseek-ai/dsh-attachment": "0.2.0-rc.2",
     "@deepseek-ai/dsh-brand": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings-models": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-credentials": "0.2.0-rc.2",
     "@deepseek-ai/dsh-fs": "0.2.0-rc.2",
     "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
     "@deepseek-ai/dsh-timeout": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-registry": "0.2.0-rc.2",
     "@earendil-works/pi-ai": "0.87.1",
     "@types/node": "^22.20.0",
+    "@types/react": "~18.3.31",
+    "@types/react-dom": "^18.3.7",
     "jsdom": "^26.1.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3"
   },
@@ -69,7 +92,9 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-ui-model-selection"
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-ui-settings-models",
+        "@deepseek-ai/dsh-api-remotes"
       ]
     }
   }

@@ -139,6 +139,19 @@ function defaultModel(settings: Record<string, unknown>, appType: CcSwitchAppTyp
     : appType === 'codex' ? 'gpt-5.5' : 'gemini-2.5-flash')
 }
 
+function configuredModels(settings: Record<string, unknown>, appType: CcSwitchAppType, model: string): CcSwitchModel[] {
+  const env = objectValue(settings.env)
+  const candidates = appType === 'claude'
+    ? [model, settings.model, env.ANTHROPIC_MODEL, env.ANTHROPIC_DEFAULT_HAIKU_MODEL,
+      env.ANTHROPIC_DEFAULT_SONNET_MODEL, env.ANTHROPIC_DEFAULT_OPUS_MODEL]
+    : [model]
+  const ids = candidates.map(nonEmpty).filter((id): id is string => id !== undefined)
+    .map(stripGeminiModelPrefix).filter(id => id.length > 0)
+  return [...new Set(ids)].map(id => ({
+    id, name: id, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS,
+  }))
+}
+
 function parseConfiguredAuth(
   settings: Record<string, unknown>,
   meta: Record<string, unknown>,
@@ -218,12 +231,7 @@ function routeFromRow(row: ProviderRow, endpoint: string | undefined): { route: 
       ? 'anthropic-messages'
       : appType === 'gemini' ? 'google-generative-ai' : codex.protocol ?? 'openai-responses',
     defaultModel: stripGeminiModelPrefix(model),
-    models: [{
-      id: stripGeminiModelPrefix(model),
-      name: stripGeminiModelPrefix(model),
-      contextWindow: DEFAULT_CONTEXT_WINDOW,
-      maxTokens: DEFAULT_MAX_TOKENS,
-    }],
+    models: configuredModels(settings, appType, model),
     authKind: auth.kind,
     ...(auth.accountId === undefined ? {} : { accountId: auth.accountId }),
     fingerprint: hash({

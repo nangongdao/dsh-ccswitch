@@ -7,6 +7,12 @@ import { CcSwitchAdapter } from './adapter.ts'
 import { resolveCredential } from './auth.ts'
 import { CcSwitchRepository } from './database.ts'
 import { discoverRouteModels } from './discovery.ts'
+import { CcSwitchImporter } from './importer.ts'
+import { CcSwitchImportController } from './import-controller.ts'
+import type { ImportRow } from './import-contract.ts'
+import type { CcSwitchRoute } from './types.ts'
+import type {} from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-credentials'
 
 export const name = 'dsh-ccswitch'
 export const inject = ['llm']
@@ -51,36 +57,78 @@ export function apply(ctx: Context): void {
     registeredRoutes = routes
   }
 
+  const lifetime = new AbortController()
+  const states = new Map<string, ImportRow['discovery']>()
+  const inFlight = new Map<string, Promise<void>>()
+  ctx.effect(() => () => lifetime.abort(), 'dsh-ccswitch: discovery lifetime')
+
+  const refreshRoute = (route: CcSwitchRoute, signal = lifetime.signal): Promise<void> => {
+    const previous = inFlight.get(route.provider)
+    if (previous !== undefined) return previous
+    const pending = (async () => {
+      states.set(route.provider, 'pending')
+      try {
+        const credential = await resolveCredential(route, repository)
+        const models = await discoverRouteModels(route, credential, AbortSignal.any([signal, lifetime.signal]))
+        const current = repository.current.routes.find(candidate => candidate.provider === route.provider)
+        if (!lifetime.signal.aborted && current?.fingerprint === route.fingerprint) {
+          states.set(route.provider, 'remote')
+          if (adapter.setDiscoveredModels(route.provider, models)) syncRegistration(true)
+        }
+      } catch {
+        const current = repository.current.routes.find(candidate => candidate.provider === route.provider)
+        if (!lifetime.signal.aborted && current?.fingerprint === route.fingerprint) {
+          states.set(route.provider, 'failed')
+          ctx.logger.debug(`dsh-ccswitch: model discovery unavailable for ${route.provider}; configured models retained`)
+        }
+      }
+    })().finally(() => { inFlight.delete(route.provider) })
+    inFlight.set(route.provider, pending)
+    return pending
+  }
   const discover = async (): Promise<void> => {
-    if (!repository.config.discoverModels || refreshing) return
+    if (!repository.config.discoverModels || refreshing || lifetime.signal.aborted) return
     refreshing = true
     const source = repository.current
     try {
-      for (const route of source.routes) {
-        try {
-          const credential = await resolveCredential(route, repository)
-          const models = await discoverRouteModels(route, credential)
-          const current = repository.current.routes.find(candidate => candidate.provider === route.provider)
-          if (current?.fingerprint === route.fingerprint && adapter.setDiscoveredModels(route.provider, models)) {
-            syncRegistration(true)
-          }
-        } catch (error: unknown) {
-          // Discovery is advisory. The configured/default model remains
-          // available when an endpoint is private, offline, or OAuth-expired.
-          ctx.logger.debug(`dsh-ccswitch: model discovery skipped for ${route.provider}: ${describeError(error)}`)
+      let cursor = 0
+      await Promise.all(Array.from({ length: Math.min(4, source.routes.length) }, async () => {
+        while (!lifetime.signal.aborted) {
+          const route = source.routes[cursor++]
+          if (route === undefined) break
+          await refreshRoute(route)
         }
-      }
+      }))
     } finally {
       refreshing = false
       lastDiscoveryAt = Date.now()
     }
   }
 
+  // Optional native integration: the existing bridge still works in headless
+  // profiles without settings or a writable credential provider.
+  ctx.inject(['settings', 'credentials'], child => {
+    const importer = new CcSwitchImporter({
+      settings: child.settings,
+      credentials: child.credentials,
+      routes: () => repository.current.routes,
+      models: route => adapter.modelsForRoute(route),
+      discovery: provider => states.get(provider) ?? 'configured',
+      credential: route => resolveCredential(route, repository),
+      refresh: refreshRoute,
+      changed: () => {},
+    })
+    child.plugin(CcSwitchImportController, importer)
+  })
+
   const poll = (): void => {
     try {
       if (!repository.exists()) return
       const changed = repository.read()
-      if (changed) adapter.clearDiscoveredModels()
+      if (changed) {
+        adapter.clearDiscoveredModels()
+        states.clear()
+      }
       syncRegistration(changed)
       if (changed || Date.now() - lastDiscoveryAt >= DISCOVERY_RETRY_MS) void discover()
     } catch (error: unknown) {
