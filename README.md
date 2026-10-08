@@ -54,7 +54,7 @@ dsh web --host 127.0.0.1 --port 3080
 
 同一条线路如果已经在「设置 → 模型」里导入为原生供应商，就不会再以 `CC Switch ·` 分组重复出现——一份由 DSH 原生供应商提供，另一份不再列出，避免同一线路出现两组模型。
 
-## 在「设置 → 模型」中管理（0.4.1）
+## 在「设置 → 模型」中管理（0.4.2）
 
 除了模型选择器，插件还会在 DSH 的「设置 → 模型」页面底部加入一个「从 CC Switch 导入线路」面板。面板开头的一句话先说明关系：**不导入也能用**——所有线路本来就以 `CC Switch ·` 分组出现在模型选择器里；导入只是把某条线路固定成 DSH 原生供应商，方便改显示名、单独调参或手动增删模型。
 
@@ -169,10 +169,15 @@ dsh web --host 127.0.0.1 --port 3080
 
 ## 版本兼容
 
-`dsh-ccswitch` `0.4.1` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout`、`dsh-settings`、`dsh-credentials`、`dsh-typert-protocol`、`dsh-client-ui-slots`、`dsh-client-ui-settings-models` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
+`dsh-ccswitch` `0.4.2` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout`、`dsh-settings`、`dsh-credentials`、`dsh-typert-protocol`、`dsh-client-ui-slots`、`dsh-client-ui-settings-models` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
 
 - DSH `0.2.0-rc.2` 及后续 `0.2.x`：使用本版本。
 - DSH `0.1.x`（含 `0.1.0-rc.7`）：请继续使用 `dsh-ccswitch` `0.1.1`，本版本不向下兼容。
+
+`0.4.2` 修掉了「接口读不到就当成模型下架」的隐患：
+
+- 「更新模型」只在接口确实返回了列表（本次读取成功）时才清掉旧模型；如果接口这次没读到，就只把 CC Switch 配置里的模型并进去，一个都不删，并明确写出「接口模型列表读取失败，没有删除任何模型」。
+- 首次导入时如果接口没读到，只写入 CC Switch 配置里的模型，导入结果里会提示「只写入了 CC Switch 配置里的模型；可在卡片里补充」，避免以为目录已经完整。
 
 `0.4.1` 让面板上的信息更贴近 DSH 的真实状态：
 

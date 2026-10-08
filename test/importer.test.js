@@ -159,6 +159,7 @@ test('a route with no known model is refreshed before it is imported', async () 
   const outcomes = await f.importer.importProviders([f.routes[0].provider], signal())
   assert.equal(outcomes[0].status, 'imported')
   assert.equal(f.refreshes(), 1)
+  assert.match(outcomes[0].message, /接口模型列表读取失败/, 'a fallback catalog is reported, not hidden')
   assert.equal(f.providers[importedProviderId(f.routes[0])].models.length, 1)
 })
 
@@ -177,7 +178,8 @@ test('an already fetched catalog is not fetched again on import', async () => {
 })
 
 test('updating a route refetches its catalog, keeps hand-added models and the key', async () => {
-  const f = fixture()
+  let discovery = 'configured'
+  const f = fixture({ discovery: () => discovery })
   await f.importer.importProviders([f.routes[0].provider], signal())
   const target = importedProviderId(f.routes[0])
   const profile = f.providers[target]
@@ -187,6 +189,7 @@ test('updating a route refetches its catalog, keeps hand-added models and the ke
   const ref = profile.apiKeyEnv
   const secret = f.keys.get(ref)
   f.routes[0] = route({ fingerprint: 'two', models: [{ ...model, id: 'gpt-5.7-sol' }] })
+  discovery = 'remote'
   const outcomes = await f.importer.resync([f.routes[0].provider], signal())
   assert.equal(outcomes[0].status, 'updated')
   assert.match(outcomes[0].message, /已同步 1 个模型/)
@@ -199,6 +202,30 @@ test('updating a route refetches its catalog, keeps hand-added models and the ke
   assert.equal(next.apiKeyEnv, ref)
   assert.equal(f.keys.get(ref), secret)
   assert.equal(f.providers.preserved.displayName, 'Existing')
+})
+
+test('a failed interface read never retires the models this plugin wrote', async () => {
+  let discovery = 'remote'
+  const f = fixture({ discovery: () => discovery })
+  await f.importer.importProviders([f.routes[0].provider], signal())
+  const target = importedProviderId(f.routes[0])
+  assert.deepEqual(f.providers[target].models.map(entry => entry.id), [model.id])
+  // The interface goes away and the CC Switch config now names a different model:
+  // the old catalog would look retired, but nothing was actually confirmed.
+  discovery = 'failed'
+  f.routes[0] = route({ fingerprint: 'two', models: [{ ...model, id: 'other' }] })
+  const offline = await f.importer.resync([f.routes[0].provider], signal())
+  assert.equal(offline[0].status, 'updated')
+  assert.match(offline[0].message, /没有删除任何模型/)
+  assert.deepEqual(f.providers[target].models.map(entry => entry.id), ['other', model.id],
+    'an unconfirmed listing must not drop anything')
+  // Once the interface answers again, a model it no longer lists is dropped.
+  discovery = 'remote'
+  f.routes[0] = route({ fingerprint: 'three', models: [{ ...model, id: 'new-model' }] })
+  const online = await f.importer.resync([f.routes[0].provider], signal())
+  assert.equal(online[0].status, 'updated')
+  assert.match(online[0].message, /已同步 1 个模型/)
+  assert.deepEqual(f.providers[target].models.map(entry => entry.id), ['new-model'])
 })
 
 test('updating or removing something that was never imported is a skipped no-op', async () => {

@@ -280,7 +280,10 @@ export class CcSwitchImporter {
       committed = true
       this.lastCatalog.set(target, new Set(models.map(model => model.id)))
       this.deps.changed()
-      return { provider: id, status: 'imported', message: `已导入 ${models.length} 个模型；密钥已存入 DSH 凭据。` }
+      // Only a confirmed interface listing is a full catalog; say so when the
+      // import had to fall back to the models CC Switch itself configured.
+      const complete = this.deps.discovery(route.provider) === 'remote'
+      return { provider: id, status: 'imported', message: `已导入 ${models.length} 个模型${complete ? '' : '（接口模型列表读取失败，只写入了 CC Switch 配置里的模型；可在卡片里补充）'}；密钥已存入 DSH 凭据。` }
     } catch {
       // Never reflect credential or transport exceptions to the browser.
       if (written !== undefined && !committed) {
@@ -325,7 +328,13 @@ export class CcSwitchImporter {
     // compat, timeouts) and any model they added by hand. A model this plugin
     // wrote before and the interface no longer returns is the one thing dropped,
     // so a retired model does not linger and fail later.
-    const written = this.lastCatalog.get(target)
+    //
+    // Dropping is only safe on a *confirmed* interface listing: when the read
+    // failed, "not returned" means "not asked", and pruning would silently shrink
+    // a working catalog to the models CC Switch happens to configure.
+    const discovered = this.deps.discovery(route.provider) === 'remote'
+    const previousCatalog = this.lastCatalog.get(target)
+    const written = discovered ? previousCatalog : undefined
     const kept = (Array.isArray(previous.models) ? previous.models : [])
       .map(record).filter(model => typeof model.id === 'string'
         && !models.some(candidate => candidate.id === model.id)
@@ -340,11 +349,18 @@ export class CcSwitchImporter {
     try {
       signal.throwIfAborted()
       await this.deps.settings.mutate(NS, [{ op: 'set', path: ['providers', target], value }], native.revision)
-      this.lastCatalog.set(target, new Set(models.map(model => model.id)))
+      // Remember the union after an unconfirmed read, so a later successful sync
+      // still knows which models this plugin is responsible for.
+      this.lastCatalog.set(target, discovered
+        ? new Set(models.map(model => model.id))
+        : new Set([...(previousCatalog ?? []), ...models.map(model => model.id)]))
       this.deps.changed()
+      const keptNote = kept.length > 0 ? `，另有 ${kept.length} 个模型不在接口列表中，已原样保留` : ''
       return {
         provider: id, status: 'updated',
-        message: `已同步 ${models.length} 个模型${kept.length > 0 ? `，另有 ${kept.length} 个模型不在接口列表中，已原样保留` : ''}；密钥与其他设置未改动。`,
+        message: discovered
+          ? `已同步 ${models.length} 个模型${keptNote}；密钥与其他设置未改动。`
+          : `接口模型列表读取失败，没有删除任何模型；CC Switch 配置里的 ${models.length} 个模型已并入，其余原样保留；密钥与其他设置未改动。`,
       }
     } catch {
       return { provider: id, status: 'failed', message: '更新未完成；现有配置仍可用，请稍后重试。' }
