@@ -3,8 +3,8 @@ import test from 'node:test'
 import { JSDOM } from 'jsdom'
 
 /**
- * The native import panel is the only part of 0.3.0 the user actually clicks,
- * and it runs inside the DSH settings page. Render it for real in jsdom so the
+ * The import panel is the only part of the plugin the user actually clicks, and
+ * it runs inside the real DSH settings page. Render it for real in jsdom so the
  * React tree, the `{ ok, value }` remote envelopes and the row markup are all
  * exercised together.
  */
@@ -25,9 +25,15 @@ const claude = {
 const oauth = {
   provider: 'p-codex', targetProvider: 'ccswitch-codex-2', name: '公司 Codex',
   appType: 'codex', protocol: 'openai-responses', models: 1,
-  discovery: 'configured', imported: false, eligible: false, reason: 'OAuth 令牌仅在动态连接中使用',
+  discovery: 'configured', imported: false, eligible: false, reason: 'OAuth/登录令牌保持 CC Switch 动态连接，不复制短期令牌。',
 }
-const view = (extra = {}) => ({ available: true, writable: true, rows: [claude, oauth], ...extra })
+const installed = {
+  provider: 'p-gemini', targetProvider: 'ccswitch-gemini-3', name: '已导入的 Gemini',
+  appType: 'gemini', protocol: 'google-generative-ai', models: 7,
+  discovery: 'remote', imported: true, credential: 'configured', eligible: false,
+  reason: '已导入：模型里只保留这一份，CC Switch 的改动不会覆盖它。',
+}
+const view = (extra = {}) => ({ available: true, writable: true, rows: [claude, oauth, installed], ...extra })
 
 async function render(remote) {
   const container = document.createElement('div')
@@ -50,72 +56,125 @@ async function render(remote) {
 
 function stub(overrides = {}) {
   const calls = []
+  const ok = value => ({ ok: true, value })
   return {
     calls,
     remote: {
-      list: async () => { calls.push(['list']); return { ok: true, value: view() } },
-      refresh: async providers => { calls.push(['refresh', providers]); return { ok: true, value: view() } },
+      list: async () => { calls.push(['list']); return ok(view()) },
+      refresh: async providers => { calls.push(['refresh', providers]); return ok(view()) },
       importProviders: async providers => {
         calls.push(['import', providers])
-        return { ok: true, value: [{ provider: 'p-claude', status: 'imported', message: '已导入为 DSH 原生供应商' }] }
+        return ok([{ provider: 'p-claude', status: 'imported', message: '已导入 3 个模型；密钥已存入 DSH 凭据。' }])
+      },
+      resync: async providers => {
+        calls.push(['resync', providers])
+        return ok([{ provider: 'p-gemini', status: 'updated', message: '已同步 7 个模型；密钥与其他设置未改动。' }])
+      },
+      remove: async providers => {
+        calls.push(['remove', providers])
+        return ok([{ provider: 'p-gemini', status: 'removed', message: '已从 DSH 移除，并清理了该线路写入的密钥条目。' }])
       },
       ...overrides,
     },
   }
 }
 
-const checkbox = (container, index) => container.querySelectorAll('input[type="checkbox"]')[index]
+const groups = container => Array.from(container.querySelectorAll('.dsh-ccswitch-import-group'))
+const groupRows = (container, index) => Array.from(groups(container)[index]?.querySelectorAll('li') ?? [])
+const checkboxes = container => Array.from(container.querySelectorAll('input[type="checkbox"]'))
 const button = (container, label) =>
   Array.from(container.querySelectorAll('button')).find(element => element.textContent.includes(label))
+const count = container => container.querySelector('.dsh-ccswitch-import-count').textContent
 
-test('renders every CC Switch route with its eligibility and discovery state', async () => {
+test('groups routes into importable, already imported and dynamic connections', async () => {
   const { calls, remote } = stub()
   const panel = await render(remote)
 
   const section = panel.container.querySelector('section.dsh-ccswitch-import')
   assert.ok(section, 'the panel must render as a labelled settings section')
-  assert.equal(section.getAttribute('aria-label'), 'CC Switch 原生导入')
-  assert.match(panel.container.textContent, /一次性导入 API Key 供应商/)
+  assert.equal(section.getAttribute('aria-label'), 'CC Switch 线路导入')
+  assert.match(panel.container.textContent, /导入后该线路成为 DSH 原生供应商/)
+  assert.ok(button(panel.container, '重新载入线路'), 'the route list can be re-read without touching DSH state')
 
-  const rows = panel.container.querySelectorAll('.dsh-ccswitch-import-rows li')
-  assert.equal(rows.length, 2)
-  assert.match(rows[0].textContent, /我的 Claude · claude · 3 个模型/)
-  assert.match(rows[0].textContent, /接口已返回列表/)
-  assert.equal(checkbox(panel.container, 0).disabled, false)
-  assert.equal(checkbox(panel.container, 0).checked, false)
+  // Importable: one selectable row.
+  const importable = groupRows(panel.container, 0)
+  assert.equal(importable.length, 1)
+  assert.match(importable[0].textContent, /我的 Claude/)
+  assert.match(importable[0].textContent, /Claude/)
+  assert.match(importable[0].textContent, /3 个模型/)
+  assert.match(importable[0].textContent, /模型列表来自供应商接口/)
+  assert.equal(checkboxes(panel.container)[0].disabled, false)
+  assert.equal(checkboxes(panel.container)[0].checked, false)
 
-  assert.match(rows[1].textContent, /公司 Codex · codex · 1 个模型/)
-  assert.match(rows[1].textContent, /仅 CC Switch 配置模型；OAuth 令牌仅在动态连接中使用/)
-  assert.equal(checkbox(panel.container, 1).disabled, true, 'OAuth routes must not be selectable')
+  // Already imported: has its key state and its own actions, no checkbox.
+  const imported = groupRows(panel.container, 1)
+  assert.equal(imported.length, 1)
+  assert.match(imported[0].textContent, /已导入的 Gemini/)
+  assert.match(imported[0].textContent, /只保留这一份/)
+  assert.ok(imported[0].querySelector('.dsh-ccswitch-import-dot'))
+  assert.equal(imported[0].querySelector('input[type="checkbox"]'), null)
+  assert.ok(button(imported[0], '更新模型'))
+  assert.ok(button(imported[0], '移除'))
 
+  // Dynamic connections stay collapsed, with the reason for each.
+  const dynamic = panel.container.querySelector('details.dsh-ccswitch-import-dynamic')
+  assert.match(dynamic.querySelector('summary').textContent, /保持 CC Switch 动态连接 1/)
+  assert.match(dynamic.textContent, /公司 Codex/)
+  assert.match(dynamic.textContent, /OAuth\/登录令牌保持 CC Switch 动态连接/)
+  assert.equal(dynamic.querySelector('input[type="checkbox"]'), null)
+
+  assert.match(count(panel.container), /可导入 1 · 已选 0/)
   assert.deepEqual(calls, [['list']])
   await panel.unmount()
 })
 
-test('refreshes and imports only the selected providers', async () => {
+test('selects all, then imports only the selected providers in chunks', async () => {
   const { calls, remote } = stub()
   const panel = await render(remote)
 
-  assert.match(button(panel.container, '导入所选').textContent, /导入所选 \(0\)/)
   assert.equal(button(panel.container, '导入所选').disabled, true)
-  assert.equal(button(panel.container, '获取所选模型列表').disabled, true)
-
-  await panel.click(button(panel.container, '选择可导入项'))
-  assert.match(button(panel.container, '导入所选').textContent, /导入所选 \(1\)/)
-  assert.equal(button(panel.container, '导入所选').disabled, false)
-  assert.equal(checkbox(panel.container, 0).checked, true)
-  assert.equal(checkbox(panel.container, 1).checked, false)
-
-  await panel.click(button(panel.container, '获取所选模型列表'))
-  await panel.click(button(panel.container, '导入所选'))
-  assert.deepEqual(calls, [['list'], ['refresh', ['p-claude']], ['import', ['p-claude']], ['list']])
-
-  const status = panel.container.querySelector('[role="status"]')
-  assert.match(status.textContent, /我的 Claude：已导入为 DSH 原生供应商/)
-
-  await panel.click(checkbox(panel.container, 0))
+  assert.equal(button(panel.container, '读取全部 (1)').disabled, false,
+    'with nothing selected the read button covers every importable route')
   assert.match(button(panel.container, '导入所选').textContent, /导入所选 \(0\)/)
+
+  await panel.click(button(panel.container, '读取全部 (1)'))
+  assert.deepEqual(calls, [['list'], ['refresh', ['p-claude']]])
+  calls.length = 0
+
+  await panel.click(button(panel.container, '全选'))
+  assert.match(count(panel.container), /已选 1/)
+  assert.equal(checkboxes(panel.container)[0].checked, true)
+  assert.equal(button(panel.container, '导入所选').disabled, false)
+  await panel.click(button(panel.container, '导入所选'))
+
+  assert.deepEqual(calls, [['import', ['p-claude']], ['list']])
+  const feedback = panel.container.querySelector('.dsh-ccswitch-import-feedback')
+  assert.match(feedback.querySelector('[role="status"]').textContent, /成功 1 · 跳过 0 · 失败 0/)
+  assert.match(feedback.textContent, /我的 Claude：已导入 3 个模型/)
   await panel.unmount()
+})
+
+test('updates or removes an imported route, asking once before removing', async () => {
+  const { calls, remote } = stub()
+  const panel = await render(remote)
+  const [row] = groupRows(panel.container, 1)
+
+  await panel.click(button(row, '更新模型'))
+  assert.deepEqual(calls, [['list'], ['resync', ['p-gemini']], ['list']])
+  assert.match(panel.container.querySelector('.dsh-ccswitch-import-feedback').textContent, /已同步 7 个模型/)
+
+  const { calls: second, remote: secondRemote } = stub()
+  const removing = await render(secondRemote)
+  const [target] = groupRows(removing.container, 1)
+  await removing.click(button(target, '移除'))
+  assert.deepEqual(second, [['list']], 'removing must confirm before it writes')
+  assert.match(removing.container.textContent, /移除会删除这个 DSH 原生供应商/)
+  await removing.click(button(removing.container, '确认移除'))
+  assert.deepEqual(second, [['list'], ['remove', ['p-gemini']], ['list']])
+  assert.match(removing.container.querySelector('.dsh-ccswitch-import-feedback').textContent, /已从 DSH 移除/)
+
+  await panel.unmount()
+  await removing.unmount()
 })
 
 test('filters rows and reports an empty result without losing the panel', async () => {
@@ -124,12 +183,12 @@ test('filters rows and reports an empty result without losing the panel', async 
   const filter = panel.container.querySelector('input[type="search"]')
 
   await panel.type(filter, 'codex')
-  assert.equal(panel.container.querySelectorAll('.dsh-ccswitch-import-rows li').length, 1)
-  assert.match(panel.container.querySelector('.dsh-ccswitch-import-rows li').textContent, /公司 Codex/)
+  assert.match(count(panel.container), /可导入 0/)
+  assert.match(panel.container.querySelector('details').textContent, /公司 Codex/)
 
   await panel.type(filter, '不存在的线路')
   assert.equal(panel.container.querySelectorAll('.dsh-ccswitch-import-rows li').length, 0)
-  assert.match(panel.container.textContent, /没有匹配的供应商。/)
+  assert.match(panel.container.textContent, /没有匹配的线路。/)
   assert.ok(panel.container.querySelector('section.dsh-ccswitch-import'))
   await panel.unmount()
 })
@@ -152,13 +211,30 @@ test('surfaces read-only, unavailable and failed reads instead of rendering a br
   await rejected.unmount()
 })
 
+test('a missing key and an empty catalog are reported instead of hidden', async () => {
+  const rows = [
+    { ...installed, credential: 'missing' },
+    { ...claude, models: 0, discovery: 'failed', eligible: false, reason: '该线路还没有可用模型：请先「读取模型列表」，或检查接口地址与密钥。' },
+  ]
+  const { remote } = stub({ list: async () => ({ ok: true, value: view({ rows }) }) })
+  const panel = await render(remote)
+
+  assert.match(panel.container.textContent, /密钥条目不见了/)
+  assert.ok(groupRows(panel.container, 0)[0].querySelector('.dsh-ccswitch-import-dot.is-missing'))
+  const dynamic = panel.container.querySelector('details.dsh-ccswitch-import-dynamic')
+  assert.match(dynamic.textContent, /接口读取失败/)
+  assert.match(dynamic.textContent, /还没有可用模型/)
+  assert.doesNotMatch(panel.container.textContent, /undefined/)
+  await panel.unmount()
+})
+
 test('a failed import keeps the panel usable and never echoes the upstream error', async () => {
   const { remote } = stub({
     importProviders: async () => ({ ok: false, error: { message: 'sk-secret upstream failure' } }),
   })
   const panel = await render(remote)
 
-  await panel.click(button(panel.container, '选择可导入项'))
+  await panel.click(button(panel.container, '全选'))
   await panel.click(button(panel.container, '导入所选'))
 
   const alert = panel.container.querySelector('[role="alert"]')
@@ -166,4 +242,23 @@ test('a failed import keeps the panel usable and never echoes the upstream error
   assert.doesNotMatch(panel.container.textContent, /sk-secret/)
   assert.equal(button(panel.container, '导入所选').disabled, false)
   await panel.unmount()
+})
+
+test('reloads the route list on demand and never selects more than one batch', async () => {
+  const { calls, remote } = stub()
+  const panel = await render(remote)
+  await panel.click(button(panel.container, '重新载入线路'))
+  assert.deepEqual(calls, [['list'], ['list']])
+  await panel.unmount()
+
+  const many = Array.from({ length: 130 }, (_, index) => ({
+    ...claude, provider: `p-${index}`, targetProvider: `ccswitch-claude-${index}`, name: `线路 ${index}`,
+  }))
+  const batch = await render(stub({ list: async () => ({ ok: true, value: view({ rows: many }) }) }).remote)
+  assert.match(batch.container.textContent, /可导入 130/)
+  await batch.click(button(batch.container, '全选'))
+  assert.match(count(batch.container), /已选 128/)
+  assert.equal(checkboxes(batch.container).filter(box => box.checked).length, 128)
+  assert.match(batch.container.textContent, /一次最多导入 128 条/)
+  await batch.unmount()
 })

@@ -9,6 +9,8 @@ export interface ImportRow {
   models: number
   discovery: 'configured' | 'pending' | 'remote' | 'failed'
   imported: boolean
+  /** Only meaningful for imported routes: whether the written key is still there. */
+  credential?: 'configured' | 'missing'
   eligible: boolean
   reason: string
 }
@@ -19,13 +21,15 @@ export interface ImportView {
 }
 export interface ImportOutcome {
   provider: string
-  status: 'imported' | 'skipped' | 'failed'
+  status: 'imported' | 'updated' | 'removed' | 'skipped' | 'failed'
   message: string
 }
 export interface ImportRemote {
   list(): Promise<RemoteResult<ImportView>>
   refresh(providers: string[]): Promise<RemoteResult<ImportView>>
   importProviders(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
+  resync(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
+  remove(providers: string[]): Promise<RemoteResult<ImportOutcome[]>>
 }
 
 // Public SRC-mode descriptors: the Host still validates every business input
@@ -42,5 +46,11 @@ const descriptor = (method: string, parameters: string[], cancellable = false): 
 })
 export const importRemoteContribution: TypertRemoteContribution = {
   package: 'dsh-ccswitch',
-  descriptors: [descriptor('list', []), descriptor('refresh', ['providers'], true), descriptor('importProviders', ['providers'], true)],
+  descriptors: [
+    descriptor('list', []),
+    descriptor('refresh', ['providers'], true),
+    descriptor('importProviders', ['providers'], true),
+    descriptor('resync', ['providers'], true),
+    descriptor('remove', ['providers'], true),
+  ],
 }

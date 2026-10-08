@@ -7,11 +7,11 @@ import { CcSwitchAdapter } from './adapter.ts'
 import { resolveCredential } from './auth.ts'
 import { CcSwitchRepository } from './database.ts'
 import { discoverRouteModels } from './discovery.ts'
-import { CcSwitchImporter } from './importer.ts'
+import { CcSwitchImporter, dynamicRoutes } from './importer.ts'
 import { CcSwitchImportController } from './import-controller.ts'
 import type { ImportRow } from './import-contract.ts'
 import type { CcSwitchRoute } from './types.ts'
-import type {} from '@deepseek-ai/dsh-settings'
+import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-credentials'
 
 export const name = 'dsh-ccswitch'
@@ -39,7 +39,9 @@ export function apply(ctx: Context): void {
   let lastDiscoveryAt = 0
 
   const syncRegistration = (force = false): void => {
-    const routes = repository.current.routes.map(route => route.provider)
+    // A route DSH imported stops being offered by this adapter: the same route
+    // twice in the model picker is worse than a missing one.
+    const routes = dynamicRoutes(repository.current.routes, ctx.get('settings')).map(route => route.provider)
     if (routes.length === 0) {
       if (registration !== undefined && registeredRoutes.length > 0) {
         registration.replace([])
@@ -116,9 +118,14 @@ export function apply(ctx: Context): void {
       discovery: provider => states.get(provider) ?? 'configured',
       credential: route => resolveCredential(route, repository),
       refresh: refreshRoute,
-      changed: () => {},
+      // Importing or removing a native provider moves that route between DSH
+      // and this adapter, so the published catalog has to be republished.
+      changed: () => syncRegistration(true),
     })
     child.plugin(CcSwitchImportController, importer)
+    // Settings may arrive after startup, when the first registration already
+    // published routes DSH had imported in an earlier session.
+    syncRegistration(true)
   })
 
   const poll = (): void => {
