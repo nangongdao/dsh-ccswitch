@@ -3,8 +3,8 @@ import test from 'node:test'
 import { JSDOM } from 'jsdom'
 
 /**
- * What the client entry declares to the real DSH shell. Two faults lived here
- * and both were silent in production, so they are locked down mechanically:
+ * What the client entry declares to the real DSH shell. Three faults lived here
+ * and all three were silent in production, so they are locked down mechanically:
  *
  *  1. A parameter codec that is not `strict` makes the Client's `$mount`
  *     validator reject the whole contribution (`requireStrictInputs` ->
@@ -12,6 +12,10 @@ import { JSDOM } from 'jsdom'
  *  2. Registering the two slots *after* `await ctx.remote.$mount(...)` meant a
  *     mounting failure deleted the panel and the card badge from the UI with no
  *     visible trace at all.
+ *  3. Reading the mounted namespace as `ctx.remote.ccswitch` throws under real
+ *     cordis — `inject` names the top-level service, never a child of it — so a
+ *     SUCCESSFUL mount still rejected the effect and left the panel dead. The
+ *     fake context below models that trap, which the previous one did not.
  */
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { pretendToBeVisual: true })
 globalThis.window = dom.window
@@ -30,6 +34,8 @@ function context(mount) {
   const registered = []
   const errors = []
   const disposers = []
+  // What `ctx.provide` / `$mount` made available, readable without `inject`.
+  const provided = new Map()
   const ctx = {
     effect(execute, label) {
       let dispose
@@ -58,9 +64,35 @@ function context(mount) {
       register(spec, component) { registered.push({ spec, component }); return () => {} },
       inject(name, callback) { injected.push({ name, callback }) },
     },
-    remote: { $mount: mount, ccswitch: undefined },
+    // `ctx.reflect.get` is the inject-free read the plugin must use.
+    reflect: { get(name) { return provided.get(name) } },
+    // `ctx.remote` resolves because the plugin declares `inject: ['remote']`,
+    // but a child namespace is NOT an injectable property: real cordis throws
+    // here. Modelling that is what makes fault 3 reproducible in a test.
+    remote: new Proxy({ $mount: mount }, {
+      get(target, property, receiver) {
+        if (typeof property === 'string' && Reflect.has(target, property)) {
+          return Reflect.get(target, property, receiver)
+        }
+        throw new Error(`cannot get property "remote.${String(property)}" without inject`)
+      },
+    }),
   }
-  return { ctx, labels, injected, registered, errors, disposers }
+  return { ctx, labels, injected, registered, errors, disposers, provided }
+}
+
+/** Capture `console.error` so a regression's diagnostics do not pollute output. */
+function captureErrors() {
+  const logged = []
+  const original = console.error
+  console.error = (...args) => { logged.push(args.map(String).join(' ')) }
+  return {
+    logged,
+    // Node prints its own `ExperimentalWarning` through this channel; only the
+    // plugin's own diagnostics are under test.
+    plugin: () => logged.filter(line => line.includes('[dsh-ccswitch]')),
+    restore() { console.error = original },
+  }
 }
 
 const mounted = {
@@ -108,30 +140,63 @@ test('every remote parameter carries a strict codec the Host can actually decode
 test('registers both seats before mounting, so a failed mount cannot hide them', async () => {
   const failure = new Error('client api: generated Remote src:ccswitch#ccswitch/refresh field "providers" has no strict codec')
   const { ctx, injected, registered, errors } = context(async () => { throw failure })
+  const capture = captureErrors()
 
-  apply(ctx)
+  try {
+    apply(ctx)
 
-  // Synchronous, and before the Remote exists: this is the whole regression.
-  assert.deepEqual(injected.map(entry => entry.name), ['settings.models.footer', 'settings.models.provider-card'])
-  for (const { callback } of injected) callback()
-  assert.deepEqual(registered.map(entry => [entry.spec.name, entry.spec.id ?? entry.spec.key]),
-    [['settings.models.footer', 'dsh-ccswitch'], ['settings.models.provider-card', 'llm-pi-ai']])
+    // Synchronous, and before the Remote exists: this is the whole regression.
+    assert.deepEqual(injected.map(entry => entry.name), ['settings.models.footer', 'settings.models.provider-card'])
+    for (const { callback } of injected) callback()
+    assert.deepEqual(registered.map(entry => [entry.spec.name, entry.spec.id ?? entry.spec.key]),
+      [['settings.models.footer', 'dsh-ccswitch'], ['settings.models.provider-card', 'llm-pi-ai']])
 
-  // The seats stay wired; their provider explains the failure instead of vanishing.
-  const remote = registered[0].spec.inject().remote
-  await assert.rejects(remote.list(), /远程接口没有挂载成功/)
-  for (const name of METHODS.slice(1)) await assert.rejects(remote[name](['p-claude']), /远程接口没有挂载成功/)
+    // The seats stay wired; their provider explains the failure instead of vanishing.
+    const remote = registered[0].spec.inject().remote
+    await assert.rejects(remote.list(), /远程接口没有挂载成功/)
+    for (const name of METHODS.slice(1)) await assert.rejects(remote[name](['p-claude']), /远程接口没有挂载成功/)
 
-  // cordis routes the rejected mount to `ctx.logger.error` (what this fake
-  // captures): the failure is reported, not swallowed.
-  await new Promise(resolve => setTimeout(resolve, 0))
-  assert.deepEqual(errors, [failure])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // The effect now handles its own failure, so the reason reaches BOTH the
+    // panel (thrown message) and the renderer console (what lands in a crash log).
+    assert.deepEqual(errors, [])
+    assert.equal(capture.plugin().length, 1, JSON.stringify(capture.logged))
+    assert.match(capture.plugin()[0], /the Remote contribution was refused/)
+    assert.match(capture.plugin()[0], /has no strict codec/)
+    await assert.rejects(remote.list(), /has no strict codec/)
+  } finally {
+    capture.restore()
+  }
+})
+
+test('adopts a namespace that a previous activation already mounted', async () => {
+  // A live patch reload can activate this bundle again while the first
+  // activation still owns the namespace. `$mount` then refuses the duplicate
+  // with `already mounted`, but the installed namespace is alive and usable.
+  const duplicate = new Error('client api: direct method ccswitch/list is already mounted')
+  const { ctx, injected, registered, provided } = context(async () => { throw duplicate })
+  const capture = captureErrors()
+
+  try {
+    provided.set('remote.ccswitch', mounted)
+    apply(ctx)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    for (const { callback } of injected) callback()
+    const remote = registered[0].spec.inject().remote
+    // The panel must work here: the earlier fault was exactly this situation.
+    assert.equal((await remote.list()).ok, true)
+    assert.equal((await remote.resync(['p-claude'])).ok, true)
+    assert.deepEqual(capture.plugin(), [])
+  } finally {
+    capture.restore()
+  }
 })
 
 test('hands the seats the live namespace once the contribution mounts', async () => {
-  const { ctx, injected, registered, disposers } = context(async () => {
-    ctx.remote.ccswitch = mounted
-    return async () => { ctx.remote.ccswitch = undefined }
+  const { ctx, injected, registered, disposers, provided } = context(async () => {
+    provided.set('remote.ccswitch', mounted)
+    return async () => { provided.delete('remote.ccswitch') }
   })
 
   apply(ctx)
@@ -150,4 +215,24 @@ test('hands the seats the live namespace once the contribution mounts', async ()
   assert.equal(disposers.length, 3)
   await disposers[2]()
   await assert.rejects(remote.list(), /远程接口没有挂载成功/)
+})
+
+test('reports a namespace that mounts but cannot be read back', async () => {
+  // Guards the exact shape of fault 3: a successful `$mount` whose namespace is
+  // not readable must be a visible, self-explaining failure — never a silent one.
+  const { ctx, injected, registered } = context(async () => async () => {})
+  const capture = captureErrors()
+
+  try {
+    apply(ctx)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    for (const { callback } of injected) callback()
+    const remote = registered[0].spec.inject().remote
+    await assert.rejects(remote.list(), /远程接口没有挂载成功/)
+    assert.equal(capture.plugin().length, 1)
+    assert.match(capture.plugin()[0], /could not read it back/)
+  } finally {
+    capture.restore()
+  }
 })

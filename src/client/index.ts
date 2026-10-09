@@ -121,10 +121,13 @@ const styles = `
 }
 `
 
-type ClientContext = Pick<Context, 'effect'> & {
+type ClientContext = Pick<Context, 'effect' | 'reflect'> & {
   slots: Pick<SlotCore, 'register'> & { inject(name: SeatName, callback: () => (() => void)): void }
-  remote: TypertClientRemote & { ccswitch: ImportRemote }
+  remote: TypertClientRemote
 }
+
+/** The namespace `$mount` installs, addressed the way cordis requires it. */
+const NAMESPACE_KEY = 'remote.ccswitch'
 
 export const inject: readonly string[] = ['slots', 'remote']
 
@@ -134,14 +137,22 @@ export const inject: readonly string[] = ['slots', 'remote']
  * renders a read failure as a notice — so a wiring fault degrades into a
  * visible message instead of taking the whole section down with it.
  */
-const UNAVAILABLE = 'CC Switch 远程接口没有挂载成功，导入面板暂时不可用。请完全退出并重启 DSH 后重试；若仍然如此，请把这条消息与日志一起反馈。'
+const UNAVAILABLE = 'CC Switch 远程接口没有挂载成功，导入面板暂时不可用。'
+const UNAVAILABLE_HINT = '请完全退出并重启 DSH 后重试；若仍然如此，请把这条消息与日志一起反馈。'
+
+/** The mounting failure, kept so the panel can show why instead of guessing. */
+let mountFailure = ''
+const describeUnavailable = () => mountFailure === ''
+  ? `${UNAVAILABLE}${UNAVAILABLE_HINT}`
+  : `${UNAVAILABLE}${mountFailure}`
+
 const unavailableRemote: ImportRemote = {
-  list: async () => { throw new Error(UNAVAILABLE) },
-  refresh: async () => { throw new Error(UNAVAILABLE) },
-  importProviders: async () => { throw new Error(UNAVAILABLE) },
-  resync: async () => { throw new Error(UNAVAILABLE) },
-  refreshKey: async () => { throw new Error(UNAVAILABLE) },
-  removeProviders: async () => { throw new Error(UNAVAILABLE) },
+  list: async () => { throw new Error(describeUnavailable()) },
+  refresh: async () => { throw new Error(describeUnavailable()) },
+  importProviders: async () => { throw new Error(describeUnavailable()) },
+  resync: async () => { throw new Error(describeUnavailable()) },
+  refreshKey: async () => { throw new Error(describeUnavailable()) },
+  removeProviders: async () => { throw new Error(describeUnavailable()) },
 }
 
 export function apply(ctx: ClientContext): void {
@@ -182,9 +193,45 @@ export function apply(ctx: ClientContext): void {
     name: 'settings.models.provider-card', key: IMPORT_NAMESPACE, inject,
   }, ProviderCardExtras))
 
+  // `remote.ccswitch` is a NAMESPACE, and cordis only lets a fiber read a
+  // context property it declared in `inject` — `inject` names the top-level
+  // service (`remote`), never a child of it. Reading `ctx.remote.ccswitch`
+  // therefore throws `cannot get property "remote.ccswitch" without inject`,
+  // which used to reject the mounting effect *after* a successful `$mount` and
+  // leave the panel permanently unavailable. `ctx.reflect.get` is the
+  // documented, inject-free read; `dsh-at-file` reads its namespace the same way.
+  const readNamespace = (): ImportRemote | undefined => {
+    const live: unknown = ctx.reflect.get(NAMESPACE_KEY)
+    return live === undefined || live === null ? undefined : live as ImportRemote
+  }
+
   ctx.effect(async () => {
-    const disposeRemote = await ctx.remote.$mount(importRemoteContribution)
-    active = ctx.remote.ccswitch
+    let disposeRemote: (() => Promise<void>) | undefined
+    try {
+      disposeRemote = await ctx.remote.$mount(importRemoteContribution)
+    } catch (error) {
+      mountFailure = error instanceof Error ? error.message : String(error)
+      // A live patch reload can activate this bundle a second time while the
+      // first activation still owns the namespace. `$mount` then refuses the
+      // duplicate contribution, but the installed namespace keeps working —
+      // so adopt it instead of leaving the panel dead for no reason.
+      const adopted = readNamespace()
+      if (adopted === undefined) {
+        console.error('[dsh-ccswitch] the Remote contribution was refused:', error)
+        return () => {}
+      }
+      mountFailure = ''
+      active = adopted
+      return () => { active = unavailableRemote }
+    }
+    const mounted = readNamespace()
+    if (mounted === undefined) {
+      mountFailure = `已挂载但读不到 ${NAMESPACE_KEY}。`
+      console.error('[dsh-ccswitch] mounted the Remote but could not read it back')
+      return () => {}
+    }
+    mountFailure = ''
+    active = mounted
     return () => {
       active = unavailableRemote
       return disposeRemote()

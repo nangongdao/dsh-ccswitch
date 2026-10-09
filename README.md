@@ -54,7 +54,7 @@ dsh web --host 127.0.0.1 --port 3080
 
 同一条线路如果已经在「设置 → 模型」里导入为原生供应商，就不会再以 `CC Switch ·` 分组重复出现——一份由 DSH 原生供应商提供，另一份不再列出，避免同一线路出现两组模型。
 
-## 在「设置 → 模型」中管理（0.4.8）
+## 在「设置 → 模型」中管理（0.4.9）
 
 除了模型选择器，插件还会在 DSH 的「设置 → 模型」页面底部加入一个「从 CC Switch 导入线路」面板。面板开头的一句话先说明关系：**不导入也能用**——所有线路本来就以 `CC Switch ·` 分组出现在模型选择器里；导入只是把某条线路固定成 DSH 原生供应商，方便改显示名、单独调参或手动增删模型。
 
@@ -175,10 +175,18 @@ dsh web --host 127.0.0.1 --port 3080
 
 ## 版本兼容
 
-`dsh-ccswitch` `0.4.8` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout`、`dsh-settings`、`dsh-credentials`、`dsh-typert-protocol`、`dsh-client-ui-slots`、`dsh-client-ui-settings-models` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
+`dsh-ccswitch` `0.4.9` 针对 DeepSeek Harness `0.2.0-rc.2` 构建，依赖 `@deepseek-ai/dsh-llm`、`dsh-attachment`、`dsh-brand`、`dsh-fs`、`dsh-timeout`、`dsh-settings`、`dsh-credentials`、`dsh-typert-protocol`、`dsh-client-ui-slots`、`dsh-client-ui-settings-models` 的 `0.2.0-rc.2`，以及 `@earendil-works/pi-ai` `^0.87.1`。
 
 - DSH `0.2.0-rc.2` 及后续 `0.2.x`：使用本版本。
 - DSH `0.1.x`（含 `0.1.0-rc.7`）：请继续使用 `dsh-ccswitch` `0.1.1`，本版本不向下兼容。
+
+`0.4.9` 修掉了「面板一直显示『远程接口没有挂载成功』，按键永远是灰的」：
+
+- 根因是读回已挂载的远程命名空间时写成了 `ctx.remote.ccswitch`。`remote.ccswitch` 是一个**子命名空间**，而 cordis 只允许插件读取自己在 `inject` 里声明过的上下文属性——`inject` 声明的是顶层服务名 `remote`，从来不含它的子项。于是取 `ctx.remote.ccswitch` 会抛 `cannot get property "remote.ccswitch" without inject`，把**已经挂载成功**的那次 `$mount` 之后的读回语句变成异常，整个 effect 失败，面板只能停在降级实现上。换句话说：远程接口其实挂上了，只是插件读不回来。
+- 现在改用 cordis 的免 `inject` 读取方式 `ctx.reflect.get('remote.ccswitch')`（DSH 自带插件 `dsh-at-file` 读自己的命名空间用的就是这一句），并在读不到时给出明确说明而不是静默失败。
+- 顺带修掉「live 重载后插件第二次激活」的场景：`patchReload: "live"` 的 profile 会重放客户端 bundle，第二次 `$mount` 会被以 `already mounted` 拒绝，但此时命名空间其实是活的。现在这种情况会**接管**那个已存在的命名空间，面板照常可用，而不是因为一次重复激活就永久变灰。
+- 挂载失败的真实原因现在会写进渲染进程的 `console.error`（会落进崩溃日志的 renderer console 段）并显示在面板上，以后同类问题不必再靠读源码定位。
+- 新增 3 个回归测试：假上下文现在会像真实 cordis 一样在读取子命名空间时抛错（这正是此前测试无法发现该缺陷的原因）、重复激活时接管既有命名空间、挂载成功但读不回时报错而不是静默。测试总数 126。
 
 `0.4.8` 修掉了「可导入 0」：
 
